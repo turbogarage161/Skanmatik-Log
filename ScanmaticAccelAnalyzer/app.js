@@ -993,6 +993,7 @@ function reanalyzeAll() {
   renderPullList();
   renderCharts();
   renderStats();
+  renderColumnMap();
 }
 
 function allPulls() {
