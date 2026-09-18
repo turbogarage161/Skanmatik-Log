@@ -32,6 +32,8 @@ let overviewChart = null;
 
 /** @type {Array<LogFile>} */
 let logs = [];
+/** SM2-сессии, чтобы фильтр без разгонов не терял файлы. */
+let sm2Sources = [];
 let colorIdx = 0;
 /** @type {"classic" | "link" | "dyno"} */
 let accelTab = "link";
@@ -732,6 +734,7 @@ async function addFiles(fileList) {
         const parsed = parseSm2ArrayBuffer(buf);
         let added = 0;
         for (const session of parsed.sessions) {
+          sm2Sources.push({ session, fileName: file.name });
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
@@ -844,21 +847,9 @@ function makePullFromAll(log) {
 function reanalyzeAll() {
   const opts = optsFromUi();
   colorIdx = 0;
-  const sessions = [];
-  const seen = new Set();
-  const csvLogs = [];
-  for (const log of logs) {
-    if (log.sm2Session) {
-      if (!seen.has(log.sm2Session)) {
-        seen.add(log.sm2Session);
-        sessions.push({ session: log.sm2Session, fileName: log.rawName });
-      }
-    } else {
-      csvLogs.push(log);
-    }
-  }
+  const csvLogs = logs.filter((log) => !log.sm2Session);
   logs = [];
-  for (const item of sessions) addWotsFromSession(item.session, item.fileName, opts);
+  for (const item of sm2Sources) addWotsFromSession(item.session, item.fileName, opts);
   for (const log of csvLogs) {
     log.pulls = findPulls(log, opts);
     log.pulls.forEach((p, i) => { p.selected = i < 3; });
@@ -882,7 +873,7 @@ function renderPullList() {
   const pulls = allPulls();
   if (!pulls.length) {
     box.className = "pull-list empty";
-      box.textContent = logs.length
+      box.textContent = (logs.length || sm2Sources.length)
       ? "Разгоны не найдены. Сдвиньте ползунки оборотов и педали/дросселя или уменьшите мин. длительность."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
@@ -1755,6 +1746,7 @@ function savePng() {
 
 function clearAll() {
   logs = [];
+  sm2Sources = [];
   colorIdx = 0;
   if (accelChartClassic) { accelChartClassic.destroy(); accelChartClassic = null; }
   if (accelChartLink) { accelChartLink.destroy(); accelChartLink = null; }
