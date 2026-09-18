@@ -310,6 +310,21 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
   const chCount = strideGuess / SM2_SAMPLE;
   if (!Number.isInteger(chCount) || chCount < 1 || chCount > 40) return [];
 
+  const phaseFreq = new Map();
+  for (const a of anchors) {
+    const ph = ((a.off % strideGuess) + strideGuess) % strideGuess;
+    phaseFreq.set(ph, (phaseFreq.get(ph) || 0) + 1);
+  }
+  let phase = 0;
+  let phaseN = -1;
+  for (const [p, n] of phaseFreq) {
+    if (n > phaseN) { phase = p; phaseN = n; }
+  }
+  const aligned = anchors.filter((a) =>
+    (((a.off % strideGuess) + strideGuess) % strideGuess) === phase
+  );
+  if (aligned.length < 5) return [];
+
   let rpmCh = namedRpm >= 0 && namedRpm < chCount ? namedRpm : 0;
   // если имя RPM вне кадра (шаг меньше числа имён) — RPM в начале найденного якоря
   if (namedRpm >= chCount) rpmCh = 0;
@@ -322,7 +337,7 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
   const rows = [];
   const seen = new Set();
   let lastPedal = 0;
-  for (const a of anchors) {
+  for (const a of aligned) {
     const rec = a.off - rpmCh * SM2_SAMPLE;
     if (rec < from - SM2_SAMPLE || rec + strideGuess > to + SM2_SAMPLE) continue;
     if (rec < 0) continue;
@@ -354,7 +369,11 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     rows.push({ t: a.t / 1000, rpm, pedal, speed });
   }
   rows.sort((a, b) => a.t - b.t);
-  return rows;
+  if (rows.length < 5) return rows;
+  const times = rows.map((r) => r.t).sort((a, b) => a - b);
+  const med = times[Math.floor(times.length / 2)];
+  const cleaned = rows.filter((r) => Math.abs(r.t - med) < 900);
+  return cleaned.length >= 5 ? cleaned : rows;
 }
 
 function sm2LongestRising(rows, from, to) {
@@ -445,20 +464,23 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const pushSeg = (a0, b0) => {
     if (b0 - a0 < 3) return;
     for (const rising of sm2AllRisingSegments(rows, a0, b0)) {
+      const durFull = rows[rising.b].t - rows[rising.a].t;
+      const gainFull = rows[rising.b].rpm - rows[rising.a].rpm;
+      if (!sm2MeetsMinDur(durFull, minDur)) continue;
+      if (!(gainFull >= minRpmGain)) continue;
       const cropped = sm2CropRisingByRpm(rows, rising.a, rising.b, rpmMin, rpmMax);
       if (!cropped) continue;
       const dur = rows[cropped.b].t - rows[cropped.a].t;
       const rpm0 = rows[cropped.a].rpm;
       const rpm1 = rows[cropped.b].rpm;
       const gain = rpm1 - rpm0;
-      if (!sm2MeetsMinDur(dur, minDur)) continue;
-      if (!(gain >= minRpmGain)) continue;
+      if (gain < 80) continue;
       candidates.push({
         a: cropped.a,
         b: cropped.b,
         dur,
         gain,
-        score: dur * Math.sqrt(Math.max(gain, 1)),
+        score: durFull * Math.sqrt(Math.max(gainFull, 1)),
       });
     }
   };

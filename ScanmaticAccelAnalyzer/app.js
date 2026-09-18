@@ -819,6 +819,7 @@ function reanalyzeAll() {
     // keep selection by ordinal if names differ
     log.pulls.forEach((p, i) => { p.selected = i < 3 || selectedIds.has(p.name); });
   }
+  renderColumnMap();
   renderPullList();
   renderCharts();
   renderStats();

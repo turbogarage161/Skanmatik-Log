@@ -1,4 +1,4 @@
-const CACHE = "sm2-accel-v32";
+const CACHE = "sm2-accel-v33";
 const ASSETS = [
   "./",
   "./index.html",
