@@ -1104,7 +1104,13 @@ function fmtSec(n) {
 function renderColumnMap() {
   const panel = $("columnMapPanel");
   const map = $("columnMap");
-  if (!logs.length) { panel.hidden = true; return; }
+  if (!logs.length) {
+    panel.hidden = true;
+    const o = optsFromUi();
+    $("columnHint").textContent =
+      `Окно ${o.rpmMin}–${o.rpmMax} об/мин (любая ширина). WOT ≥ ${o.wotFloor}%. Показ — весь непрерывный набор, не ширина ползунков.`;
+    return;
+  }
   panel.hidden = false;
   const log = logs[logs.length - 1];
   const mkSelect = (id, selected) => {
