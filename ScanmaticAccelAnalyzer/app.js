@@ -904,7 +904,7 @@ async function addFiles(fileList) {
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
-          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. В диапазоне оборотов педаль/дроссель должны быть в WOT и удерживаться.`);
+          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. На телефоне Сканматик пишет короткие пачки и рампу дросселя — порог WOT можно опустить.`);
         }
         continue;
       }
@@ -1053,8 +1053,8 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = (logs.length || sm2Sources.length)
-      ? "Разгоны не найдены. В диапазоне оборотов педаль/дроссель должны быть в WOT и удерживаться на всём отрезке."
-      : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
+      ? "Разгоны не найдены в выбранном фильтре. ПК: полка WOT. Телефон: рампа дросселя в короткой пачке тоже считается, если пик дотягивает до порога (или до максимума PID, если он ниже ползунка)."
+      : "Загрузите .sm2 (OBD-II, ПК или телефон) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
     return;
@@ -1144,7 +1144,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
-    `. В окне ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин педаль/дроссель в WOT ≥ ${optsFromUi().wotFloor}% и удерживается (шум до 2%). Показ — весь непрерывный набор.` +
+    `. Окно ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин, WOT ≥ ${optsFromUi().wotFloor}% (ПК — полка ±2%; телефон — рампа, если PID не доходит до ползунка — по максимуму лога). Показ — весь набор.` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -2127,7 +2127,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Два ползунка оборотов — начало и конец. В диапазоне педаль в WOT на всём отрезке; на графике — весь непрерывный набор.";
+  $("columnHint").textContent = "Окно оборотов — начало и конец. ПК: полка WOT. Телефон: рампа дросселя в короткой пачке тоже ищется. На графике — весь набор.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {

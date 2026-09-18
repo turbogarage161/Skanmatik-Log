@@ -7,8 +7,10 @@
  *   • сессии: маркер 01 FF FF FF FF с 0x400; хвостовые пустые блоки 0x400 без имён — отброс.
  *   • 2 канала (компакт): f64 rpm | i32 t_ms | f64 thr | i32 t_next  (24 Б, шаг 24…33).
  *   • N>2: на канал f64 | i64 t_ms | i64         (24×N).
- *   • ПК ~7–10 Гц (dt≈0.13 с). Телефон ~4 Гц (dt≈0.26 с) и паузы 7–12 с — это не один разгон.
- *   • Ford Absolute Throttle WOT ≈ 85.88% (219/255), не 100%.
+ *   • ПК ~7–10 Гц (dt≈0.13 с). Телефон ~4 Гц (dt≈0.26 с): пачки ~3.5 с (≈14 кадров) и паузы 7–12 с —
+ *     это обрезки одного разгона, не один непрерывный прогон. Последний кадр пачки часто pedal=0.
+ *   • Ford Absolute Throttle WOT ≈ 85.88% (219/255), не 100%. На телефоне тот же PID часто рампа
+ *     35–80% (иногда максимум ~50–58%) — полки 86% нет, это не «не-WOT».
  *   • в хвосте сессии иногда мусорные timestamp (часы) — отрезаем основной кластер времени.
  *
  * Раскладки, на которых учится детектор:
@@ -822,11 +824,73 @@ function sm2PedalAdmitsPull(ped, { pedalMinReq, pedalMax }) {
 }
 
 function sm2NoPedalAdmitsPull(rows, a, b, { gain, rps, n, rpm0, rpm1 }) {
-  if (rpm1 < 2400 && rpm0 < 1600) return false;
-  if (gain < 700) return false;
-  if (n < 8 && gain < 1200) return false;
-  if (rps < 120) return false;
+  if (rpm1 < 1800 && rpm0 < 1400) return false;
+  if (gain < 450) return false;
+  if (n < 6 && gain < 700) return false;
+  if (rps < 90) return false;
   return true;
+}
+
+/** Телефон: PID дросселя часто не доходит до ползунка WOT (макс ~50–58%). */
+function sm2EffectiveWotFloor(wotFloor, sessionMax) {
+  const floor = Number(wotFloor);
+  if (!Number.isFinite(floor)) return 70;
+  if (!sm2Ok(sessionMax) || sessionMax >= floor - 0.5) return floor;
+  return Math.max(28, Math.min(floor, sessionMax * 0.55));
+}
+
+/** Android ставит 0% на последнем кадре пачки — не отпускание педали. */
+function sm2TrimPedalEdges(rows, a, b) {
+  if (b - a < 2) return { a, b };
+  let s = a;
+  let e = b;
+  while (s < e - 2) {
+    const p = rows[s].pedal;
+    if (!sm2Ok(p) || p < 8) s++;
+    else break;
+  }
+  while (e > s + 2) {
+    const p = rows[e].pedal;
+    if (!sm2Ok(p) || p < 8) e--;
+    else break;
+  }
+  return { a: s, b: e };
+}
+
+/**
+ * Рампа телефона: педаль не обязана стоять ±2%.
+ * Нужен пик ≥ пола и отсутствие сброса в холостой на всём наборе.
+ */
+function sm2RampPedalOk(rows, a, b, floor) {
+  const core = sm2TrimPedalEdges(rows, a, b);
+  if (core.b - core.a < 2) return false;
+  const ped = sm2SegPedalStats(rows, core.a, core.b);
+  if (!ped || ped.max < floor - 1) return false;
+  const idle = Math.min(18, Math.max(8, floor * 0.35));
+  let prev = null;
+  for (let i = core.a; i <= core.b; i++) {
+    const p = rows[i].pedal;
+    if (!sm2Ok(p) || p < idle) return false;
+    if (prev != null && prev - p > 22 && p < floor) return false;
+    prev = p;
+  }
+  return true;
+}
+
+function sm2NullFakeSpeedOnClimb(rows) {
+  if (!rows || rows.length < 4) return;
+  const withSp = rows.filter((r) => Number.isFinite(r.speed));
+  if (withSp.length < 3) return;
+  const rpms = rows.map((r) => r.rpm).filter((v) => Number.isFinite(v));
+  if (rpms.length < 4) return;
+  const rpmSpan = Math.max(...rpms) - Math.min(...rpms);
+  const speeds = withSp.map((r) => r.speed);
+  const spSpan = Math.max(...speeds) - Math.min(...speeds);
+  const mid = speeds.slice().sort((x, y) => x - y)[Math.floor(speeds.length / 2)];
+  const fordTps = Math.abs(mid - (219 / 255) * 100) < 1.5;
+  if (rpmSpan > 400 && (spSpan < 3 || (fordTps && spSpan < 6))) {
+    for (const r of rows) r.speed = null;
+  }
 }
 
 /** Обрезка отображения: плато WOT / высокая рампа. Частичный газ — весь набор оборотов. */
@@ -911,9 +975,10 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, noise = SM2_WOT_NOISE) {
 }
 
 /**
- * Разгоны: ползунки оборотов задают начало и конец (окно отбора).
- * В этом окне педаль/дроссель в WOT и статичны на всём отрезке.
- * На график — весь непрерывный набор, где педаль нажата и обороты росли (окно не режет).
+ * Разгоны:
+ *  • ПК: полка WOT (±2%) в окне оборотов — как раньше.
+ *  • Телефон/Android: пачка кадров, дроссель часто едет рампой и не доходит до 70%.
+ * Окно оборотов только отбирает; на график — весь непрерывный набор.
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 4) return [];
@@ -921,6 +986,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const hasPedal = pedals.length > 0;
   const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
   const wotFloor = opts.wotFloor ?? opts.pedalMin ?? opts.fullFloor ?? 70;
+  const rampFloor = sm2EffectiveWotFloor(wotFloor, maxPedal);
   const minDur = opts.minDuration ?? 3;
   let rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 2000;
   let rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 6000;
@@ -933,7 +999,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const minRps = opts.minRps ?? 20;
 
   const candidates = [];
-  const considerSeg = (seg) => {
+  const considerSeg = (seg, kind) => {
     if (!seg || seg.b - seg.a < 2) return;
     const trim = sm2TrimClimb(rows, seg.a, seg.b);
     const a = trim.a;
@@ -949,53 +1015,65 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     const rps0 = dur0 > 1e-6 ? gain0 / dur0 : 0;
     if (rps0 < minRps) return;
     if (dur0 > maxDur) return;
-    if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= 800 && n0 >= 8 && dur0 >= 1.2)) return;
+    const sparseOk = medDt >= 0.18 && n0 >= 4 && gain0 >= 600 && dur0 >= 0.7 && rps0 >= 180;
+    if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= 800 && n0 >= 8 && dur0 >= 1.2) && !sparseOk) {
+      return;
+    }
     if (!sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) return;
     const win = sm2RpmWindowSlice(rows, a, b, rpmMin, rpmMax);
     if (!win) return;
     if (hasPedal) {
-      if (!sm2WotStaticThroughout(rows, win.a, win.b, wotFloor)) return;
-      if (!sm2WotStaticThroughout(rows, a, b, wotFloor)) return;
+      if (kind === "hold") {
+        if (!sm2WotStaticThroughout(rows, win.a, win.b, wotFloor)) return;
+        if (!sm2WotStaticThroughout(rows, a, b, wotFloor)) return;
+      } else {
+        if (!sm2RampPedalOk(rows, win.a, win.b, rampFloor)) return;
+        if (!sm2RampPedalOk(rows, a, b, rampFloor)) return;
+      }
     } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1 })) {
       return;
     }
     const ped = hasPedal ? sm2SegPedalStats(rows, a, b) : null;
     const pMax = ped ? ped.max : 0;
+    const holdBonus = kind === "hold" ? 800 : 0;
     candidates.push({
       a,
       b,
+      kind: kind || "rise",
       dur: dur0,
       gain: gain0,
-      score: n0 * 8 + Math.min(dur0, 12) * Math.sqrt(Math.max(gain0, 1)) + rps0 + pMax * 6,
+      score: holdBonus + n0 * 8 + Math.min(dur0, 12) * Math.sqrt(Math.max(gain0, 1)) + rps0 + pMax * 6,
     });
   };
 
-  const considerRange = (from, to) => {
+  const considerRange = (from, to, kind) => {
     if (to - from < 2) return;
     const rising = sm2AllRisingSegments(rows, from, to);
     const longest = sm2LongestRising(rows, from, to);
     const segs = rising.slice();
     if (longest && !segs.some((s) => s.a === longest.a && s.b === longest.b)) segs.push(longest);
-    for (const seg of segs) considerSeg(seg);
+    for (const seg of segs) considerSeg(seg, kind);
   };
 
   const timeBursts = sm2TimeBursts(rows, gapSec);
-  if (hasPedal) {
-    for (const burst of timeBursts) {
-      const holds = sm2StationaryWotRuns(rows, burst.a, burst.b, wotFloor);
-      for (const hold of holds) {
-        const gears = sm2SplitByGearAndGap(rows, hold.a, hold.b, gapSec);
-        for (const g of gears) considerRange(g.a, g.b);
+  for (const burst of timeBursts) {
+    const gears = sm2SplitByGearAndGap(rows, burst.a, burst.b, gapSec);
+    for (const g of gears) {
+      if (hasPedal) {
+        const holds = sm2StationaryWotRuns(rows, g.a, g.b, wotFloor);
+        for (const hold of holds) considerRange(hold.a, hold.b, "hold");
+        considerRange(g.a, g.b, "ramp");
+      } else {
+        considerRange(g.a, g.b, "rise");
       }
-    }
-  } else {
-    for (const burst of timeBursts) {
-      const gears = sm2SplitByGearAndGap(rows, burst.a, burst.b, gapSec);
-      for (const g of gears) considerRange(g.a, g.b);
     }
   }
 
-  candidates.sort((x, y) => y.score - x.score);
+  candidates.sort((x, y) => {
+    if (x.kind === "hold" && y.kind !== "hold") return -1;
+    if (y.kind === "hold" && x.kind !== "hold") return 1;
+    return y.score - x.score;
+  });
   const kept = [];
   for (const c of candidates) {
     const overlaps = kept.some((k) => !(c.b < k.a || c.a > k.b));
@@ -1003,17 +1081,29 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   }
   kept.sort((a, b) => a.a - b.a);
 
-  return kept.map((c) => ({
-    a: c.a,
-    b: c.b,
-    rows: rows.slice(c.a, c.b + 1),
-    fullThr: wotFloor,
-    maxPedal,
-    dur: c.dur,
-    gain: c.gain,
-    score: c.score,
-    hasPedal,
-  }));
+  return kept.map((c) => {
+    const slice = rows.slice(c.a, c.b + 1).map((r) => ({ ...r }));
+    if (slice.length >= 2) {
+      const last = slice[slice.length - 1];
+      const prev = slice[slice.length - 2];
+      if (sm2Ok(prev.pedal) && (!sm2Ok(last.pedal) || last.pedal < 8) && last.rpm >= prev.rpm - 40) {
+        last.pedal = prev.pedal;
+      }
+    }
+    sm2NullFakeSpeedOnClimb(slice);
+    return {
+      a: c.a,
+      b: c.b,
+      rows: slice,
+      fullThr: c.kind === "hold" ? wotFloor : rampFloor,
+      maxPedal,
+      dur: c.dur,
+      gain: c.gain,
+      score: c.score,
+      hasPedal,
+      kind: c.kind,
+    };
+  });
 }
 
 /** Совместимость: один лучший WOT. */
