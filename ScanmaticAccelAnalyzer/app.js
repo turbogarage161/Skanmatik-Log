@@ -1822,7 +1822,7 @@ function bindDualRange(minId, maxId, fillId, labelId, fmt, minGap) {
 
 let reanalyzeTimer = 0;
 function scheduleReanalyze() {
-  if (!logs.length) return;
+  if (!logs.length && !sm2Sources.length) return;
   window.clearTimeout(reanalyzeTimer);
   reanalyzeTimer = window.setTimeout(() => reanalyzeAll(), 200);
 }
