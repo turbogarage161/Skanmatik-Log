@@ -543,6 +543,22 @@ function sm2MeetsMinDur(dur, minDur, medDt = 0.12, n = 0) {
   return false;
 }
 
+/** Кадры участка, чьи обороты лежат в [lo, hi]. */
+function sm2RpmWindowSlice(rows, a, b, lo, hi) {
+  let s = -1;
+  let e = -1;
+  for (let i = a; i <= b; i++) {
+    const r = rows[i].rpm;
+    if (!Number.isFinite(r)) continue;
+    if (r >= lo - 20 && r <= hi + 20) {
+      if (s < 0) s = i;
+      e = i;
+    }
+  }
+  if (s < 0 || e - s < 2) return null;
+  return { a: s, b: e };
+}
+
 /**
  * Ползунки оборотов: участок должен реально зайти в окно [lo, hi],
  * не «зацепить» его на 50 об/мин.
@@ -895,8 +911,9 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, noise = SM2_WOT_NOISE) {
 }
 
 /**
- * Разгоны для выбора: Δ оборотов (ползунок, не меньше 4000) + на всей этой Δ
- * педаль/дроссель в WOT предыдущего фильтра и статичны (шум до 2%).
+ * Разгоны: ползунки оборотов задают начало и конец (окно отбора).
+ * В этом окне педаль/дроссель в WOT и статичны на всём отрезке.
+ * На график — весь непрерывный набор, где педаль нажата и обороты росли (окно не режет).
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 4) return [];
@@ -905,7 +922,12 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
   const wotFloor = opts.wotFloor ?? opts.pedalMin ?? opts.fullFloor ?? 70;
   const minDur = opts.minDuration ?? 3;
-  const minRpmGain = Math.max(4000, opts.minRpmGain ?? 4000);
+  let rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 2000;
+  let rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 6000;
+  if (!(rpmMax > rpmMin)) {
+    const t = rpmMin; rpmMin = rpmMax; rpmMax = t;
+  }
+  if (rpmMax - rpmMin < 4000) rpmMax = rpmMin + 4000;
   const gapSec = opts.gapSec ?? SM2_GAP_SEC;
   const maxDur = opts.maxDuration ?? 22;
   const minRps = opts.minRps ?? 20;
@@ -922,13 +944,17 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     const rpm0 = rows[a].rpm;
     const rpm1 = rows[b].rpm;
     const gain0 = rpm1 - rpm0;
-    if (!(gain0 >= minRpmGain)) return;
+    if (!(gain0 > 200)) return;
     const medDt = sm2SegMedDt(rows, a, b);
     const rps0 = dur0 > 1e-6 ? gain0 / dur0 : 0;
     if (rps0 < minRps) return;
     if (dur0 > maxDur) return;
-    if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= minRpmGain && n0 >= 8 && dur0 >= 1.2)) return;
+    if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= 800 && n0 >= 8 && dur0 >= 1.2)) return;
+    if (!sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) return;
+    const win = sm2RpmWindowSlice(rows, a, b, rpmMin, rpmMax);
+    if (!win) return;
     if (hasPedal) {
+      if (!sm2WotStaticThroughout(rows, win.a, win.b, wotFloor)) return;
       if (!sm2WotStaticThroughout(rows, a, b, wotFloor)) return;
     } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1 })) {
       return;

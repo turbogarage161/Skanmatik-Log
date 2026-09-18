@@ -821,11 +821,13 @@ async function decodeFile(file) {
 
 function optsFromUi() {
   const wotFloor = Number($("wotFloor")?.value);
-  const minRpmGain = Number($("minRpmGain")?.value);
+  const rpmMin = Number($("rpmMin")?.value);
+  const rpmMax = Number($("rpmMax")?.value);
   return {
     wotFloor: Number.isFinite(wotFloor) ? wotFloor : 70,
     pedalMin: Number.isFinite(wotFloor) ? wotFloor : 70,
-    minRpmGain: Math.max(4000, Number.isFinite(minRpmGain) ? minRpmGain : 4000),
+    rpmMin: Number.isFinite(rpmMin) ? rpmMin : 2000,
+    rpmMax: Number.isFinite(rpmMax) ? rpmMax : 6000,
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
@@ -838,7 +840,10 @@ function sm2WotOpts(opts) {
   return {
     wotFloor: opts.wotFloor ?? opts.pedalMin ?? 70,
     pedalMin: opts.wotFloor ?? opts.pedalMin ?? 70,
-    minRpmGain: Math.max(4000, opts.minRpmGain ?? 4000),
+    rpmMin: opts.rpmMin ?? 2000,
+    rpmMax: opts.rpmMax ?? 6000,
+    rpmBandLo: opts.rpmMin ?? 2000,
+    rpmBandHi: opts.rpmMax ?? 6000,
     minDuration: opts.minDuration,
   };
 }
@@ -899,7 +904,7 @@ async function addFiles(fileList) {
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
-          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. Нужна Δ ≥ ползунка (от 4000 об/мин) и на всей Δ педаль/дроссель в WOT.`);
+          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. В диапазоне оборотов педаль/дроссель должны быть в WOT и удерживаться.`);
         }
         continue;
       }
@@ -933,7 +938,7 @@ async function addFiles(fileList) {
       };
       log.pulls = findPulls(log, opts);
       if (!log.pulls.length) {
-        alert(`В «${file.name}» нет WOT-разгона (на всей Δ педаль/дроссель в WOT, набор ≥ Δ от 4000 об/мин).`);
+        alert(`В «${file.name}» нет WOT-разгона (в диапазоне оборотов педаль/дроссель в WOT на всём отрезке).`);
       }
       logs.push(log);
     } catch (e) {
@@ -1048,7 +1053,7 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = (logs.length || sm2Sources.length)
-      ? "Разгоны не найдены. Нужна Δ оборотов ≥ ползунка (от 4000) и на всей Δ педаль/дроссель в WOT и статичны (шум до 2%)."
+      ? "Разгоны не найдены. В диапазоне оборотов педаль/дроссель должны быть в WOT и удерживаться на всём отрезке."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
@@ -1139,7 +1144,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
-    `. Разгон: на всей Δ педаль/дроссель в WOT ≥ ${optsFromUi().wotFloor}% и статичны (шум до 2%), набор ≥ ${optsFromUi().minRpmGain} об/мин` +
+    `. В окне ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин педаль/дроссель в WOT ≥ ${optsFromUi().wotFloor}% и удерживается (шум до 2%). Показ — весь непрерывный набор.` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -2122,7 +2127,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Разгон: набор ≥ Δ оборотов (ползунок, не меньше 4000). На всей Δ педаль/дроссель в WOT порога «WOT от».";
+  $("columnHint").textContent = "Два ползунка оборотов — начало и конец. В диапазоне педаль в WOT на всём отрезке; на графике — весь непрерывный набор.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {
@@ -2157,10 +2162,7 @@ function bindSlider(id, labelId, fmt) {
   const floor = Number(el.min);
   const sync = () => {
     let n = Number(el.value);
-    if (id === "minRpmGain" && (!Number.isFinite(n) || n < 4000)) {
-      n = 4000;
-      el.value = "4000";
-    } else if (Number.isFinite(floor) && Number.isFinite(n) && n < floor) {
+    if (Number.isFinite(floor) && Number.isFinite(n) && n < floor) {
       n = floor;
       el.value = String(floor);
     }
@@ -2177,8 +2179,62 @@ function bindSlider(id, labelId, fmt) {
   sync();
 }
 
+function syncDualRange(minEl, maxEl, fillEl, labelEl, fmt, minGap) {
+  if (!minEl || !maxEl) return;
+  let a = Number(minEl.value);
+  let b = Number(maxEl.value);
+  const gap = minGap ?? (Number(minEl.step) || 1);
+  if (a > b - gap) {
+    if (document.activeElement === minEl) a = b - gap;
+    else b = a + gap;
+    const lo = Number(minEl.min);
+    const hi = Number(minEl.max);
+    if (a < lo) { a = lo; b = a + gap; }
+    if (b > hi) { b = hi; a = b - gap; }
+    minEl.value = String(a);
+    maxEl.value = String(b);
+  }
+  const lo = Number(minEl.min);
+  const hi = Number(minEl.max);
+  const span = Math.max(1, hi - lo);
+  if (fillEl) {
+    const left = ((a - lo) / span) * 100;
+    const right = ((b - lo) / span) * 100;
+    fillEl.style.left = `${left}%`;
+    fillEl.style.width = `${Math.max(0, right - left)}%`;
+  }
+  if (labelEl) labelEl.textContent = fmt(a, b);
+}
+
+function bindDualRange(minId, maxId, fillId, labelId, fmt, minGap) {
+  const minEl = $(minId);
+  const maxEl = $(maxId);
+  const fillEl = $(fillId);
+  const labelEl = $(labelId);
+  const sync = () => syncDualRange(minEl, maxEl, fillEl, labelEl, fmt, minGap);
+  const onInput = () => {
+    sync();
+    scheduleReanalyze();
+  };
+  if (minEl) minEl.addEventListener("input", onInput);
+  if (maxEl) maxEl.addEventListener("input", onInput);
+  const raise = (el) => {
+    if (minEl) minEl.classList.toggle("dual-top", el === minEl);
+    if (maxEl) maxEl.classList.toggle("dual-top", el === maxEl);
+  };
+  if (minEl) {
+    minEl.addEventListener("pointerdown", () => raise(minEl));
+    minEl.addEventListener("focus", () => raise(minEl));
+  }
+  if (maxEl) {
+    maxEl.addEventListener("pointerdown", () => raise(maxEl));
+    maxEl.addEventListener("focus", () => raise(maxEl));
+  }
+  sync();
+}
+
+bindDualRange("rpmMin", "rpmMax", "rpmFill", "rpmRangeLabel", (a, b) => `${Math.round(a)}–${Math.round(b)}`, 4000);
 bindSlider("wotFloor", "wotFloorLabel", (n) => `${Math.round(n)}%`);
-bindSlider("minRpmGain", "minRpmGainLabel", (n) => String(Math.round(n)));
 bindSlider("minDuration", "minDurationLabel", (n) => `${n.toFixed(1)} с`);
 bindSlider("smoothWindow", "smoothWindowLabel", (n) => String(Math.round(n)));
 bindSlider("dtWindow", "dtWindowLabel", (n) => `${n.toFixed(2)} с`);
