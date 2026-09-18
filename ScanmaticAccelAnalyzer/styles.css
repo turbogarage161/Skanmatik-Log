@@ -341,15 +341,20 @@ input, select {
 .filters-compact {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 18px;
-  margin-bottom: 8px;
+  gap: 8px 20px;
+  margin-bottom: 12px;
+}
+
+.dual {
+  min-width: 0;
 }
 
 .settings-sliders {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 4px 16px;
+  gap: 6px 16px;
   margin-bottom: 8px;
+  padding-top: 2px;
 }
 
 .slide {
@@ -376,12 +381,47 @@ input, select {
 
 .slide input[type="range"] {
   width: 100%;
-  height: 18px;
+  height: 22px;
   margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
   accent-color: var(--accent);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.slide input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: #2a3340;
+}
+
+.slide input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e8edf4;
+  border: 2px solid #3d9cf0;
+  margin-top: -5px;
+  cursor: grab;
+}
+
+.slide input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 4px;
+  background: #2a3340;
+}
+
+.slide input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e8edf4;
+  border: 2px solid #3d9cf0;
+  cursor: grab;
 }
 
 .settings-bar {
@@ -458,14 +498,15 @@ input, select {
 
 .dual-range {
   position: relative;
-  height: 22px;
+  height: 26px;
+  isolation: isolate;
 }
 
 .dual-rail {
   position: absolute;
   left: 0;
   right: 0;
-  top: 9px;
+  top: 11px;
   height: 4px;
   border-radius: 4px;
   background: #2a3340;
