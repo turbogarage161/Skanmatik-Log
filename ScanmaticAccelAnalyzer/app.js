@@ -509,21 +509,29 @@ function getSeries(log) {
   return { time, rpm, pedal: pedalPct, speed };
 }
 
+function clipIndicesToRpm(rpm, a0, b0, rpmLo, rpmHi) {
+  let a = a0;
+  let b = b0;
+  while (a <= b && !(Number.isFinite(rpm[a]) && rpm[a] >= rpmLo)) a++;
+  for (let k = a; k <= b; k++) {
+    if (Number.isFinite(rpm[k]) && rpm[k] > rpmHi) {
+      b = k - 1;
+      break;
+    }
+  }
+  return [a, b];
+}
+
 function findPulls(log, opts) {
   const { time, rpm, pedal, speed } = getSeries(log);
-  const full = opts.fullPedal;
-  const release = opts.releasePedal;
+  const pedalLo = Number(opts.pedalLo);
+  const pedalHi = Number(opts.pedalHi);
   const minDur = opts.minDuration;
   const dtWin = opts.dtWindow ?? 0.2;
   const win = Math.max(1, opts.smoothWindow | 0);
-  const bandLo = opts.rpmBandLo ?? 2500;
-  const bandHi = opts.rpmBandHi ?? 5000;
-
-  // Адаптивный «полный газ» по этому логу
-  const finitePedal = pedal.filter((v) => Number.isFinite(v));
-  const maxPedal = finitePedal.length ? Math.max(...finitePedal) : 100;
-  const adaptiveFull = Math.max(Math.min(full, 70), maxPedal * 0.85);
-  const adaptiveRelease = Math.min(release, adaptiveFull * 0.55);
+  const rpmLo = opts.rpmBandLo ?? 1000;
+  const rpmHi = opts.rpmBandHi ?? 8000;
+  const inPedal = (v) => Number.isFinite(v) && v >= pedalLo && v <= pedalHi;
 
   // На исходных сэмплах (как в ECU/Link) — без апсемплинга
   const rpmAccelClassic = computeAccelSeries(time, rpm, { dtWindow: dtWin, smoothWindow: win }, "classic");
@@ -537,29 +545,23 @@ function findPulls(log, opts) {
     vehAccelLink = computeAccelSeries(time, v, { dtWindow: dtWin, smoothWindow: win }, "link");
   }
 
-  const coversBand = (r0, r1) => {
-    const a = Math.min(r0, r1);
-    const b = Math.max(r0, r1);
-    return a <= bandLo + 100 && b >= bandHi - 100;
-  };
-
   /** @type {Pull[]} */
   const pulls = [];
 
-  const pushSeg = (a, b) => {
+  const pushSeg = (a0, b0) => {
+    const [a, b] = clipIndicesToRpm(rpm, a0, b0, rpmLo, rpmHi);
     if (b - a < 3) return;
     const dur = time[b] - time[a];
     if (!(dur + 0.12 >= minDur)) return;
     const r0 = rpm[a];
     const r1 = rpm[b];
     if (!(r1 - r0 >= 200)) return;
-    // доп. фильтр: весь прогон накрывает 2500→5000
-    if (!coversBand(r0, r1)) return;
 
     const points = [];
     for (let k = a; k <= b; k++) {
       const prevRpm = k > a ? rpm[k - 1] : rpm[k];
       if (k > a && rpm[k] + 20 < prevRpm) continue;
+      if (!(rpm[k] >= rpmLo && rpm[k] <= rpmHi)) continue;
       const aClassic = rpmAccelClassic[k];
       const aLink = rpmAccelLink[k];
       if (!Number.isFinite(aClassic) && !Number.isFinite(aLink)) continue;
@@ -610,10 +612,10 @@ function findPulls(log, opts) {
 
   let i = 0;
   while (i < pedal.length) {
-    while (i < pedal.length && !(pedal[i] >= adaptiveFull)) i++;
+    while (i < pedal.length && !inPedal(pedal[i])) i++;
     if (i >= pedal.length) break;
     const start = i;
-    while (i < pedal.length && pedal[i] > adaptiveRelease) i++;
+    while (i < pedal.length && inPedal(pedal[i])) i++;
     const end = i - 1;
     if (end <= start) continue;
 
@@ -698,14 +700,72 @@ async function decodeFile(file) {
 }
 
 function optsFromUi() {
+  const rpmLo = Number($("rpmMin")?.value);
+  const rpmHi = Number($("rpmMax")?.value);
+  const pedalLo = Number($("pedalMin")?.value);
+  const pedalHi = Number($("pedalMax")?.value);
   return {
-    fullPedal: Number($("fullPedal").value),
-    releasePedal: Number($("releasePedal").value),
+    rpmBandLo: Number.isFinite(rpmLo) ? rpmLo : 1000,
+    rpmBandHi: Number.isFinite(rpmHi) ? rpmHi : 8000,
+    pedalLo: Number.isFinite(pedalLo) ? pedalLo : 80,
+    pedalHi: Number.isFinite(pedalHi) ? pedalHi : 100,
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
     metric: $("metric").value,
   };
+}
+
+function bindDualRange(minEl, maxEl, fillEl, labelEl, { gap, format, onInput, onChange }) {
+  if (!minEl || !maxEl) return;
+  const lo = Number(minEl.min);
+  const hi = Number(minEl.max);
+  const minGap = Number.isFinite(gap) ? gap : Number(minEl.step) || 1;
+  const paint = () => {
+    const a = Number(minEl.value);
+    const b = Number(maxEl.value);
+    const span = Math.max(1e-6, hi - lo);
+    if (fillEl) {
+      fillEl.style.left = `${((a - lo) / span) * 100}%`;
+      fillEl.style.width = `${((b - a) / span) * 100}%`;
+    }
+    if (labelEl) labelEl.textContent = format ? format(a, b) : `${a} – ${b}`;
+  };
+  const clamp = (which) => {
+    let a = Number(minEl.value);
+    let b = Number(maxEl.value);
+    if (which === "min" && a > b - minGap) minEl.value = String(b - minGap);
+    if (which === "max" && b < a + minGap) maxEl.value = String(a + minGap);
+    minEl.style.zIndex = which === "min" ? "5" : "4";
+    maxEl.style.zIndex = which === "max" ? "5" : "4";
+    paint();
+    onInput?.();
+  };
+  minEl.addEventListener("input", () => clamp("min"));
+  maxEl.addEventListener("input", () => clamp("max"));
+  minEl.addEventListener("change", () => onChange?.());
+  maxEl.addEventListener("change", () => onChange?.());
+  paint();
+}
+
+function detectPedalTitle(headers, col) {
+  const h = headers?.[col] || "";
+  const p = scoreHeader(h, PEDAL_KEYS);
+  const t = scoreHeader(h, THROTTLE_KEYS);
+  if (t > p && t >= 40) return "Дроссель";
+  if (p >= 40) return "Педаль";
+  return "Педаль / дроссель";
+}
+
+function updatePedalFilterTitle() {
+  const el = $("pedalRangeTitle");
+  if (!el) return;
+  if (!logs.length) {
+    el.textContent = "Педаль / дроссель";
+    return;
+  }
+  const titles = new Set(logs.map((l) => detectPedalTitle(l.headers, l.pedalCol)));
+  el.textContent = titles.size === 1 ? [...titles][0] : "Педаль / дроссель";
 }
 
 function uid() {
@@ -723,44 +783,35 @@ async function addFiles(fileList) {
         }
         const buf = await file.arrayBuffer();
         const parsed = parseSm2ArrayBuffer(buf);
-        let added = 0;
+        let addedPulls = 0;
         for (const session of parsed.sessions) {
-          const wots = sm2SessionToWotPulls(session, {
-            fullFloor: Math.min(opts.fullPedal, 70),
-            fullRatio: 0.85,
-            releasePedal: opts.releasePedal,
-            minDuration: opts.minDuration,
-            minRpmGain: 250,
-            rpmBandLo: 2500,
-            rpmBandHi: 5000,
-          });
-          for (const wot of wots) {
-            /** @type {LogFile} */
-            const log = {
-              id: uid(),
-              name: wot.label,
-              headers: wot.headers,
-              rows: wot.rows,
-              timeCol: 0,
-              rpmCol: 1,
-              pedalCol: 2,
-              speedCol: wot.meta?.hasSpeed && wot.headers.length >= 4 ? 3 : -1,
-              pulls: [],
-              colorBase: COLORS[colorIdx % COLORS.length],
-              rawName: file.name,
-              sm2meta: wot.meta,
-            };
-            // Сегмент уже отфильтрован по «в пол» и ≥ minDuration — один прогон
-            const pull = makePullFromAll(log);
-            pull.name = wot.label;
-            pull.selected = true;
-            log.pulls = [pull];
-            logs.push(log);
-            added++;
+          const hasSpeed = !!(session.meta?.hasSpeed && session.headers.length >= 4);
+          /** @type {LogFile} */
+          const log = {
+            id: uid(),
+            name: session.label,
+            headers: session.headers,
+            rows: session.rows,
+            timeCol: 0,
+            rpmCol: 1,
+            pedalCol: 2,
+            speedCol: hasSpeed ? 3 : -1,
+            pulls: [],
+            colorBase: COLORS[colorIdx % COLORS.length],
+            rawName: file.name,
+            sm2meta: session.meta,
+          };
+          log.pulls = findPulls(log, opts);
+          if (log.pulls.length > 1) {
+            log.pulls.forEach((p, i) => { p.name = `${session.label} · #${i + 1}`; });
           }
+          logs.push(log);
+          addedPulls += log.pulls.length;
         }
-        if (!added) {
-          alert(`В «${file.name}» нет WOT с ростом оборотов, покрывающим 2500→5000 (≥ ${opts.minDuration} с).`);
+        if (!parsed.sessions.length) {
+          alert(`В «${file.name}» нет сессий OBD-II.`);
+        } else if (!addedPulls) {
+          alert(`В «${file.name}» нет разгона в выбранном диапазоне оборотов и газа. Сдвиньте ползунки и нажмите «Пересчитать».`);
         }
         continue;
       }
@@ -868,9 +919,12 @@ function reanalyzeAll() {
   for (const log of logs) {
     const selectedIds = new Set(log.pulls.filter((p) => p.selected).map((p) => p.name));
     log.pulls = findPulls(log, opts);
-    // keep selection by ordinal if names differ
+    if (log.pulls.length > 1) {
+      log.pulls.forEach((p, i) => { p.name = `${log.name} · #${i + 1}`; });
+    }
     log.pulls.forEach((p, i) => { p.selected = i < 3 || selectedIds.has(p.name); });
   }
+  updatePedalFilterTitle();
   renderPullList();
   renderCharts();
   renderStats();
@@ -890,7 +944,7 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = logs.length
-      ? "Разгоны не найдены. Уменьшите порог «Полный газ» или мин. длительность."
+      ? "Разгоны не найдены. Расширьте ползунки оборотов и газа или уменьшите мин. длительность."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
@@ -941,7 +995,7 @@ function fmtSec(n) {
 function renderColumnMap() {
   const panel = $("columnMapPanel");
   const map = $("columnMap");
-  if (!logs.length) { panel.hidden = true; return; }
+  if (!logs.length) { panel.hidden = true; updatePedalFilterTitle(); return; }
   panel.hidden = false;
   const log = logs[logs.length - 1];
   const mkSelect = (id, selected) => {
@@ -956,7 +1010,7 @@ function renderColumnMap() {
     </label>
     <label>Время ${mkSelect("mapTime", log.timeCol)}</label>
     <label>Обороты ${mkSelect("mapRpm", log.rpmCol)}</label>
-    <label>Педаль ${mkSelect("mapPedal", log.pedalCol)}</label>
+    <label>${detectPedalTitle(log.headers, log.pedalCol)} ${mkSelect("mapPedal", log.pedalCol)}</label>
     <label>Скорость ${mkSelect("mapSpeed", log.speedCol)}</label>
     <div class="actions"><button type="button" class="btn" id="applyColsBtn">Применить к последнему файлу</button></div>
   `;
@@ -967,6 +1021,7 @@ function renderColumnMap() {
     log.speedCol = Number($("mapSpeed").value);
     const opts = optsFromUi();
     log.pulls = findPulls(log, opts);
+    updatePedalFilterTitle();
     renderPullList();
     renderCharts();
     renderStats();
@@ -976,11 +1031,11 @@ function renderColumnMap() {
     (meta
       ? `SM2 OBD-II «${log.name}»: каналов=${meta.channelCount}, кадров=${meta.samples}` +
         (meta.duration ? `, длит. ${meta.duration.toFixed(2)} с` : "") +
-        (meta.maxPedal != null ? `, max газ ${meta.maxPedal.toFixed(0)}% (порог ${meta.fullThr?.toFixed?.(0) ?? "—"}%)` : "") +
         ". "
       : "") +
-    `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
+    `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», ${detectPedalTitle(log.headers, log.pedalCol).toLowerCase()}=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}»` : "");
+  updatePedalFilterTitle();
 }
 
 function metricValue(p, metric, mode = "classic") {
@@ -990,22 +1045,32 @@ function metricValue(p, metric, mode = "classic") {
   return mode === "link" ? p.rpmAccelLink : p.rpmAccel;
 }
 
-/** Ось оборотов (X): фиксированный диапазон 2000–7500, шаг 250. */
+/** Ось оборотов (X): диапазон как на ползунке фильтра. */
+function rpmFilterBounds() {
+  const opts = optsFromUi();
+  const min = Number.isFinite(opts.rpmBandLo) ? opts.rpmBandLo : 1000;
+  const max = Number.isFinite(opts.rpmBandHi) ? opts.rpmBandHi : 8000;
+  const span = Math.max(100, max - min);
+  const step = span > 4000 ? 500 : span > 2000 ? 250 : 100;
+  return { min, max, step };
+}
+
 function rpmAxisOpts(title = "Обороты, об/мин") {
+  const { min, max, step } = rpmFilterBounds();
   return {
     type: "linear",
-    min: 2000,
-    max: 7500,
+    min,
+    max,
     title: { display: true, text: title, color: "#9aa6b5" },
     ticks: {
       color: "#9aa6b5",
-      stepSize: 250,
+      stepSize: step,
       autoSkip: false,
       maxTicksLimit: 40,
       callback: (v) => {
         const n = Number(v);
         if (!Number.isFinite(n)) return "";
-        return Math.abs(n % 250) < 0.5 || Math.abs(n % 250 - 250) < 0.5 ? Math.round(n) : undefined;
+        return Math.abs(n % step) < 0.5 || Math.abs(n % step - step) < 0.5 ? Math.round(n) : undefined;
       },
     },
     grid: { color: "#243041" },
@@ -1031,19 +1096,16 @@ function rpmYAxisOpts() {
   };
 }
 
-const RPM_AXIS_MIN = 2000;
-const RPM_AXIS_MAX = 7500;
-const RPM_AXIS_STEP = 250;
-
 function syncDeltaSliderExtent() {
   const sl = $("deltaRpm");
   if (!sl) return;
-  sl.min = String(RPM_AXIS_MIN);
-  sl.max = String(RPM_AXIS_MAX);
-  sl.step = String(RPM_AXIS_STEP);
+  const { min, max, step } = rpmFilterBounds();
+  sl.min = String(min);
+  sl.max = String(max);
+  sl.step = String(step);
   let v = Number(sl.value);
-  if (!Number.isFinite(v) || v < RPM_AXIS_MIN || v > RPM_AXIS_MAX) {
-    v = 3500;
+  if (!Number.isFinite(v) || v < min || v > max) {
+    v = Math.min(max, Math.max(min, 3500));
   }
   sl.value = String(v);
   const lab = $("deltaRpmLabel");
@@ -1144,8 +1206,9 @@ function activeMainChart() {
 }
 
 function setChartsCursorRpm(rpm, syncSlider = true) {
-  const r = Math.round(Number(rpm) / RPM_AXIS_STEP) * RPM_AXIS_STEP;
-  const clamped = Math.max(RPM_AXIS_MIN, Math.min(RPM_AXIS_MAX, r));
+  const { min, max, step } = rpmFilterBounds();
+  const r = Math.round(Number(rpm) / step) * step;
+  const clamped = Math.max(min, Math.min(max, r));
   for (const ch of [accelChartClassic, accelChartLink, accelChartDyno]) {
     if (!ch) continue;
     const changed = ch.$cursorRpm !== clamped;
@@ -1308,7 +1371,7 @@ function makeAccelChart(canvas, datasets, opts, mode) {
         const xScale = chart.scales.x;
         if (!xScale || evt.x == null) return;
         const rpm = xScale.getValueForPixel(evt.x);
-        if (Number.isFinite(rpm) && rpm >= RPM_AXIS_MIN && rpm <= RPM_AXIS_MAX) {
+        if (Number.isFinite(rpm) && rpm >= chart.scales.x.min && rpm <= chart.scales.x.max) {
           setChartsCursorRpm(rpm, true);
         }
       },
@@ -1458,7 +1521,7 @@ function makeDynoChart(canvas, pack) {
         const xScale = chart.scales.x;
         if (!xScale || evt.x == null) return;
         const rpm = xScale.getValueForPixel(evt.x);
-        if (Number.isFinite(rpm) && rpm >= RPM_AXIS_MIN && rpm <= RPM_AXIS_MAX) {
+        if (Number.isFinite(rpm) && rpm >= chart.scales.x.min && rpm <= chart.scales.x.max) {
           setChartsCursorRpm(rpm, true);
         }
       },
@@ -1772,6 +1835,7 @@ function clearAll() {
   renderCharts();
   renderStats();
   $("columnHint").textContent = "Колонки определяются автоматически. При необходимости выберите вручную после загрузки.";
+  updatePedalFilterTitle();
 }
 
 $("fileInput").addEventListener("change", async (e) => {
@@ -1784,10 +1848,22 @@ $("clearBtn").addEventListener("click", clearAll);
 $("exportBtn").addEventListener("click", exportSelectedCsv);
 $("pngBtn").addEventListener("click", savePng);
 $("metric").addEventListener("change", () => { renderCharts(); });
-["fullPedal", "releasePedal", "minDuration", "dtWindow", "smoothWindow"].forEach((id) => {
+["minDuration", "dtWindow", "smoothWindow"].forEach((id) => {
   const el = $(id);
   if (el) el.addEventListener("change", () => { if (logs.length) reanalyzeAll(); });
 });
+bindDualRange($("rpmMin"), $("rpmMax"), $("rpmRangeFill"), $("rpmRangeLabel"), {
+  gap: 100,
+  format: (a, b) => `${a} – ${b}`,
+  onInput: () => { syncDeltaSliderExtent(); },
+  onChange: () => { if (logs.length) reanalyzeAll(); else renderCharts(); },
+});
+bindDualRange($("pedalMin"), $("pedalMax"), $("pedalRangeFill"), $("pedalRangeLabel"), {
+  gap: 1,
+  format: (a, b) => `${a} – ${b}`,
+  onChange: () => { if (logs.length) reanalyzeAll(); },
+});
+syncDeltaSliderExtent();
 document.querySelectorAll(".tab[data-accel-tab]").forEach((btn) => {
   btn.addEventListener("click", () => setAccelTab(btn.getAttribute("data-accel-tab")));
 });

@@ -362,17 +362,23 @@ function sm2MeetsMinDur(dur, minDur) {
   return dur + 0.12 >= minDur;
 }
 
-/** Доп. фильтр: прогон должен накрывать полосу оборотов (по умолч. 2500→5000). */
-function sm2CoversRpmBand(rpm0, rpm1, lo = 2500, hi = 5000) {
-  if (!Number.isFinite(rpm0) || !Number.isFinite(rpm1)) return false;
-  const a = Math.min(rpm0, rpm1);
-  const b = Math.max(rpm0, rpm1);
-  return a <= lo + 100 && b >= hi - 100;
+/** Обрезать растущий кусок по выбранному диапазону оборотов. */
+function sm2ClipToRpmBand(rows, a0, b0, lo = 1000, hi = 8000) {
+  let a = a0;
+  let b = b0;
+  while (a <= b && !(sm2Ok(rows[a].rpm) && rows[a].rpm >= lo)) a++;
+  for (let k = a; k <= b; k++) {
+    if (sm2Ok(rows[k].rpm) && rows[k].rpm > hi) {
+      b = k - 1;
+      break;
+    }
+  }
+  return { a, b };
 }
 
 /**
- * Все непрерывные разгоны при «педали в пол» (адаптивный порог).
- * Только рост оборотов; доп. фильтр — полоса ≥ rpmBandLo→rpmBandHi.
+ * Все непрерывные разгоны при газе в выбранном диапазоне.
+ * Рост оборотов; кусок обрезается по rpmBandLo…rpmBandHi (по умолч. 1000–8000).
  * @returns {Array<{ rows, fullThr, maxPedal, dur, gain, score }>}
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
@@ -380,29 +386,42 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const pedals = rows.map((r) => r.pedal).filter((v) => sm2Ok(v));
   if (!pedals.length) return [];
   const maxPedal = Math.max(...pedals);
+  const pedalLo = Number.isFinite(opts.pedalLo) ? opts.pedalLo : null;
+  const pedalHi = Number.isFinite(opts.pedalHi) ? opts.pedalHi : null;
   const floor = opts.fullFloor ?? 70;
   const ratio = opts.fullRatio ?? 0.88;
-  const fullThr = Math.max(floor, maxPedal * Math.min(ratio, 0.85));
-  const releaseThr = Math.min(fullThr * 0.55, opts.releasePedal ?? 40);
+  const fullThr = pedalLo != null ? pedalLo : Math.max(floor, maxPedal * Math.min(ratio, 0.85));
+  const releaseThr = pedalLo != null ? pedalLo : Math.min(fullThr * 0.55, opts.releasePedal ?? 40);
+  const inPedal = (v) => {
+    if (!sm2Ok(v)) return false;
+    if (pedalLo != null && pedalHi != null) return v >= pedalLo && v <= pedalHi;
+    return v >= fullThr;
+  };
+  const stayPedal = (v) => {
+    if (!sm2Ok(v)) return false;
+    if (pedalLo != null && pedalHi != null) return v >= pedalLo && v <= pedalHi;
+    return v > releaseThr;
+  };
   const minDur = opts.minDuration ?? 3;
   const minRpmGain = opts.minRpmGain ?? 250;
-  const bandLo = opts.rpmBandLo ?? 2500;
-  const bandHi = opts.rpmBandHi ?? 5000;
+  const bandLo = opts.rpmBandLo ?? 1000;
+  const bandHi = opts.rpmBandHi ?? 8000;
 
   const candidates = [];
   const pushSeg = (a0, b0) => {
     if (b0 - a0 < 3) return;
     for (const rising of sm2AllRisingSegments(rows, a0, b0)) {
-      const dur = rows[rising.b].t - rows[rising.a].t;
-      const rpm0 = rows[rising.a].rpm;
-      const rpm1 = rows[rising.b].rpm;
+      const clipped = sm2ClipToRpmBand(rows, rising.a, rising.b, bandLo, bandHi);
+      if (clipped.b - clipped.a < 3) continue;
+      const dur = rows[clipped.b].t - rows[clipped.a].t;
+      const rpm0 = rows[clipped.a].rpm;
+      const rpm1 = rows[clipped.b].rpm;
       const gain = rpm1 - rpm0;
       if (!sm2MeetsMinDur(dur, minDur)) continue;
       if (!(gain >= minRpmGain)) continue;
-      if (!sm2CoversRpmBand(rpm0, rpm1, bandLo, bandHi)) continue;
       candidates.push({
-        a: rising.a,
-        b: rising.b,
+        a: clipped.a,
+        b: clipped.b,
         dur,
         gain,
         score: dur * Math.sqrt(Math.max(gain, 1)),
@@ -412,10 +431,10 @@ function sm2FindAllWotPulls(rows, opts = {}) {
 
   let i = 0;
   while (i < rows.length) {
-    while (i < rows.length && !(rows[i].pedal >= fullThr)) i++;
+    while (i < rows.length && !inPedal(rows[i].pedal)) i++;
     if (i >= rows.length) break;
     let start = i;
-    while (i < rows.length && rows[i].pedal > releaseThr) i++;
+    while (i < rows.length && stayPedal(rows[i].pedal)) i++;
     let end = i - 1;
     if (end - start < 4) continue;
 

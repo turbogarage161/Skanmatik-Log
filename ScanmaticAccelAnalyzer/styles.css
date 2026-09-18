@@ -70,6 +70,130 @@ h2 {
   align-items: end;
 }
 
+.compact-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 20px;
+  margin: 0 0 12px;
+  align-items: center;
+}
+
+.dual-range {
+  min-width: 0;
+}
+
+.dual-range-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.2;
+  margin-bottom: 1px;
+}
+
+.dual-range-head strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.dual-unit {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.dual-range-ctrl {
+  position: relative;
+  height: 20px;
+}
+
+.dual-range-rail {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+  background: #0f1318;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.dual-range-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #2f7fc7, var(--accent));
+  border-radius: 99px;
+}
+
+.dual-range-ctrl input[type="range"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  pointer-events: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.dual-range-ctrl input[type="range"]::-webkit-slider-runnable-track {
+  height: 20px;
+  background: transparent;
+  border: none;
+}
+
+.dual-range-ctrl input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #e8edf4;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 1px #0f1318;
+  cursor: pointer;
+}
+
+.dual-range-ctrl input[type="range"]::-moz-range-track {
+  height: 3px;
+  background: transparent;
+  border: none;
+}
+
+.dual-range-ctrl input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e8edf4;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 1px #0f1318;
+  cursor: pointer;
+}
+
+.dual-range-ctrl input[type="range"]:focus {
+  outline: none;
+}
+
+.dual-range-ctrl input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px #0f1318, 0 0 0 4px var(--accent);
+}
+
+@media (max-width: 720px) {
+  .compact-filters { grid-template-columns: 1fr; }
+}
+
 label {
   display: flex;
   flex-direction: column;
