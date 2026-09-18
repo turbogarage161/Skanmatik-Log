@@ -283,8 +283,8 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     for (let c = 0; c < chCount; c++) chans.push(sm2ReadF64(view, rec + c * SM2_SAMPLE));
 
     // выбрать канал педали/дросселя
-    let pedalCh = thrNameIdx >= 0 && thrNameIdx < chCount ? thrNameIdx
-      : pedalNameIdx >= 0 && pedalNameIdx < chCount ? pedalNameIdx : -1;
+    let pedalCh = pedalNameIdx >= 0 && pedalNameIdx < chCount ? pedalNameIdx
+      : thrNameIdx >= 0 && thrNameIdx < chCount ? thrNameIdx : -1;
     if (pedalCh < 0 || pedalCh === rpmCh) {
       let best = -1; let bestS = -1e9;
       for (let c = 0; c < chCount; c++) {

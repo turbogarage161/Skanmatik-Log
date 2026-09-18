@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=10"></script>
+  <script src="sm2.js?v=11"></script>
 </head>
 <body>
   <div class="app">
@@ -78,16 +78,32 @@
     </section>
 
     <section class="panel settings">
-      <h2>Детекция полного газа (педаль / дроссель OBD-II)</h2>
-      <div class="grid">
-        <label>
-          Полный газ ≥ % (если меньше макс. в логе — берётся ~88% от макс.)
-          <input type="number" id="fullPedal" value="80" min="50" max="100" step="1" />
-        </label>
-        <label>
-          Отпущена ≤ %
-          <input type="number" id="releasePedal" value="40" min="0" max="70" step="1" />
-        </label>
+      <h2>Фильтры разгона</h2>
+      <div class="range-filters">
+        <div class="compact-range">
+          <div class="range-head">
+            <span>Обороты</span>
+            <strong><span id="rpmMinLabel">2500</span>–<span id="rpmMaxLabel">5000</span> об/мин</strong>
+          </div>
+          <div class="dual-range" id="rpmRange">
+            <div class="range-track"></div>
+            <input type="range" id="rpmMin" min="1000" max="8000" step="100" value="2500" aria-label="Минимальные обороты" />
+            <input type="range" id="rpmMax" min="1000" max="8000" step="100" value="5000" aria-label="Максимальные обороты" />
+          </div>
+        </div>
+        <div class="compact-range">
+          <div class="range-head">
+            <span id="loadRangeTitle">Педаль / дроссель</span>
+            <strong><span id="loadMinLabel">80</span>–<span id="loadMaxLabel">100</span>%</strong>
+          </div>
+          <div class="dual-range" id="loadRange">
+            <div class="range-track"></div>
+            <input type="range" id="loadMin" min="0" max="100" step="1" value="80" aria-label="Минимальное положение педали или дросселя" />
+            <input type="range" id="loadMax" min="0" max="100" step="1" value="100" aria-label="Максимальное положение педали или дросселя" />
+          </div>
+        </div>
+      </div>
+      <div class="grid settings-grid">
         <label>
           Мин. длительность разгона, с
           <input type="number" id="minDuration" value="3" min="0.5" max="30" step="0.1" />
@@ -112,7 +128,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Выборка: педаль/дроссель в пол + рост оборотов; доп. фильтр — прогон накрывает 2500→5000 об/мин, ≥3 с.</p>
+      <p class="hint" id="columnHint">Выборка: 80–100% педали/дросселя, 2500–5000 об/мин, ≥3 с.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -121,6 +137,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>
