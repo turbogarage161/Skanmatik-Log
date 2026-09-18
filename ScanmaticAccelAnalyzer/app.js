@@ -825,7 +825,7 @@ function optsFromUi() {
   return {
     wotFloor: Number.isFinite(wotFloor) ? wotFloor : 70,
     pedalMin: Number.isFinite(wotFloor) ? wotFloor : 70,
-    minRpmGain: Number.isFinite(minRpmGain) ? minRpmGain : 4000,
+    minRpmGain: Math.max(4000, Number.isFinite(minRpmGain) ? minRpmGain : 4000),
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
@@ -838,7 +838,7 @@ function sm2WotOpts(opts) {
   return {
     wotFloor: opts.wotFloor ?? opts.pedalMin ?? 70,
     pedalMin: opts.wotFloor ?? opts.pedalMin ?? 70,
-    minRpmGain: opts.minRpmGain ?? 4000,
+    minRpmGain: Math.max(4000, opts.minRpmGain ?? 4000),
     minDuration: opts.minDuration,
   };
 }

@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css?v=5" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=25"></script>
+  <script src="sm2.js?v=26"></script>
 </head>
 <body>
   <div class="app">
@@ -86,7 +86,7 @@
         </label>
         <label class="slide">
           <span class="slide-head">Мин. набор оборотов <strong id="minRpmGainLabel">4000</strong></span>
-          <input type="range" id="minRpmGain" min="1000" max="7000" step="100" value="4000" />
+          <input type="range" id="minRpmGain" min="4000" max="7000" step="100" value="4000" />
         </label>
       </div>
       <div class="settings-sliders">
@@ -123,7 +123,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Авто-WOT: педаль/дроссель не меняется и выше порога, обороты растут минимум на выбранную Δ. Один ползунок — граница WOT, второй — минимальный набор об/мин.</p>
+      <p class="hint" id="columnHint">Авто-WOT: педаль/дроссель не меняется и выше порога «WOT от». На этой полке обороты растут на Δ (ползунок набора, не меньше 4000).</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -132,6 +132,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=57"></script>
+  <script src="app.js?v=58"></script>
 </body>
 </html>
