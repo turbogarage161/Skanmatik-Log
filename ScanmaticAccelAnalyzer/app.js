@@ -820,15 +820,12 @@ async function decodeFile(file) {
 }
 
 function optsFromUi() {
-  const rpmMin = Number($("rpmMin")?.value);
-  const rpmMax = Number($("rpmMax")?.value);
-  const pedalMin = Number($("pedalMin")?.value);
-  const pedalMax = Number($("pedalMax")?.value);
+  const wotFloor = Number($("wotFloor")?.value);
+  const minRpmGain = Number($("minRpmGain")?.value);
   return {
-    rpmMin: Number.isFinite(rpmMin) ? rpmMin : 1000,
-    rpmMax: Number.isFinite(rpmMax) ? rpmMax : 8000,
-    pedalMin: Number.isFinite(pedalMin) ? pedalMin : 70,
-    pedalMax: Number.isFinite(pedalMax) ? pedalMax : 100,
+    wotFloor: Number.isFinite(wotFloor) ? wotFloor : 70,
+    pedalMin: Number.isFinite(wotFloor) ? wotFloor : 70,
+    minRpmGain: Number.isFinite(minRpmGain) ? minRpmGain : 4000,
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
@@ -839,13 +836,10 @@ function optsFromUi() {
 
 function sm2WotOpts(opts) {
   return {
-    pedalMin: opts.pedalMin,
-    pedalMax: opts.pedalMax,
+    wotFloor: opts.wotFloor ?? opts.pedalMin ?? 70,
+    pedalMin: opts.wotFloor ?? opts.pedalMin ?? 70,
+    minRpmGain: opts.minRpmGain ?? 4000,
     minDuration: opts.minDuration,
-    rpmMin: opts.rpmMin,
-    rpmMax: opts.rpmMax,
-    rpmBandLo: opts.rpmMin,
-    rpmBandHi: opts.rpmMax,
   };
 }
 
@@ -1151,6 +1145,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
+    `. Авто-WOT: педаль/дроссель неподвижны и ≥ ${optsFromUi().wotFloor}%, набор ≥ ${optsFromUi().minRpmGain} об/мин` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -2133,7 +2128,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Ищутся все разгоны на одной передаче: вспышка записи → высокая педаль/дроссель → рост оборотов. Обороты — окно-гистерезис.";
+  $("columnHint").textContent = "Авто-WOT: педаль/дроссель не меняется и выше порога, обороты растут минимум на выбранную Δ.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {
@@ -2154,65 +2149,12 @@ if (speedLockEl) {
   });
 }
 
-function syncDualRange(minEl, maxEl, fillEl, labelEl, fmt, minGap) {
-  if (!minEl || !maxEl) return;
-  let a = Number(minEl.value);
-  let b = Number(maxEl.value);
-  const gap = minGap ?? (Number(minEl.step) || 1);
-  if (a > b - gap) {
-    if (document.activeElement === minEl) a = b - gap;
-    else b = a + gap;
-    minEl.value = String(a);
-    maxEl.value = String(b);
-  }
-  const lo = Number(minEl.min);
-  const hi = Number(minEl.max);
-  const span = Math.max(1, hi - lo);
-  if (fillEl) {
-    const left = ((a - lo) / span) * 100;
-    const right = ((b - lo) / span) * 100;
-    fillEl.style.left = `${left}%`;
-    fillEl.style.width = `${Math.max(0, right - left)}%`;
-  }
-  if (labelEl) labelEl.textContent = fmt(a, b);
-}
-
-function bindDualRange(minId, maxId, fillId, labelId, fmt, minGap) {
-  const minEl = $(minId);
-  const maxEl = $(maxId);
-  const fillEl = $(fillId);
-  const labelEl = $(labelId);
-  const sync = () => syncDualRange(minEl, maxEl, fillEl, labelEl, fmt, minGap);
-  const onInput = () => {
-    sync();
-    scheduleReanalyze();
-  };
-  if (minEl) minEl.addEventListener("input", onInput);
-  if (maxEl) maxEl.addEventListener("input", onInput);
-  const raise = (el) => {
-    if (minEl) minEl.classList.toggle("dual-top", el === minEl);
-    if (maxEl) maxEl.classList.toggle("dual-top", el === maxEl);
-  };
-  if (minEl) {
-    minEl.addEventListener("pointerdown", () => raise(minEl));
-    minEl.addEventListener("focus", () => raise(minEl));
-  }
-  if (maxEl) {
-    maxEl.addEventListener("pointerdown", () => raise(maxEl));
-    maxEl.addEventListener("focus", () => raise(maxEl));
-  }
-  sync();
-}
-
 let reanalyzeTimer = 0;
 function scheduleReanalyze() {
   if (!logs.length && !sm2Sources.length) return;
   window.clearTimeout(reanalyzeTimer);
   reanalyzeTimer = window.setTimeout(() => reanalyzeAll(), 200);
 }
-
-bindDualRange("rpmMin", "rpmMax", "rpmFill", "rpmRangeLabel", (a, b) => `${a}–${b}`, 100);
-bindDualRange("pedalMin", "pedalMax", "pedalFill", "pedalRangeLabel", (a, b) => `${a}–${b}`, 1);
 
 function bindSlider(id, labelId, fmt) {
   const el = $(id);
@@ -2232,6 +2174,8 @@ function bindSlider(id, labelId, fmt) {
   sync();
 }
 
+bindSlider("wotFloor", "wotFloorLabel", (n) => `${Math.round(n)}%`);
+bindSlider("minRpmGain", "minRpmGainLabel", (n) => String(Math.round(n)));
 bindSlider("minDuration", "minDurationLabel", (n) => `${n.toFixed(1)} с`);
 bindSlider("smoothWindow", "smoothWindowLabel", (n) => String(Math.round(n)));
 bindSlider("dtWindow", "dtWindowLabel", (n) => `${n.toFixed(2)} с`);

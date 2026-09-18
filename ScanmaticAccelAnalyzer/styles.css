@@ -338,11 +338,9 @@ input, select {
 
 .best { color: var(--accent-2); font-weight: 650; }
 
-.filters-compact {
-  display: grid;
+.filters-main {
   grid-template-columns: 1fr 1fr;
-  gap: 8px 20px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .dual {
@@ -576,7 +574,7 @@ input, select {
   .layout { grid-template-columns: 1fr; }
   .pulls { position: static; max-height: none; }
   .header { flex-direction: column; }
-  .filters-compact,
+  .filters-main,
   .settings-sliders {
     grid-template-columns: 1fr;
   }

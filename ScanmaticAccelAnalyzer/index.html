@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Анализатор разгонов — Scanmatic SM2</title>
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=5" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=23"></script>
+  <script src="sm2.js?v=25"></script>
 </head>
 <body>
   <div class="app">
@@ -79,31 +79,15 @@
 
     <section class="panel settings">
       <h2>Фильтры разгона</h2>
-      <div class="filters-compact">
-        <div class="dual">
-          <div class="dual-head">
-            <span>Обороты</span>
-            <strong id="rpmRangeLabel">1000–8000</strong>
-            <span class="muted">об/мин</span>
-          </div>
-          <div class="dual-range" aria-label="Диапазон оборотов">
-            <div class="dual-rail"><div class="dual-fill" id="rpmFill"></div></div>
-            <input type="range" id="rpmMin" min="1000" max="8000" step="100" value="1000" />
-            <input type="range" id="rpmMax" min="1000" max="8000" step="100" value="8000" />
-          </div>
-        </div>
-        <div class="dual">
-          <div class="dual-head">
-            <span>Педаль / дроссель</span>
-            <strong id="pedalRangeLabel">70–100</strong>
-            <span class="muted">%</span>
-          </div>
-          <div class="dual-range" aria-label="Диапазон педали или дросселя">
-            <div class="dual-rail"><div class="dual-fill" id="pedalFill"></div></div>
-            <input type="range" id="pedalMin" min="0" max="100" step="1" value="70" />
-            <input type="range" id="pedalMax" min="0" max="100" step="1" value="100" />
-          </div>
-        </div>
+      <div class="settings-sliders filters-main">
+        <label class="slide">
+          <span class="slide-head">WOT от <strong id="wotFloorLabel">70%</strong></span>
+          <input type="range" id="wotFloor" min="30" max="100" step="1" value="70" />
+        </label>
+        <label class="slide">
+          <span class="slide-head">Мин. набор оборотов <strong id="minRpmGainLabel">4000</strong></span>
+          <input type="range" id="minRpmGain" min="1000" max="7000" step="100" value="4000" />
+        </label>
       </div>
       <div class="settings-sliders">
         <label class="slide">
@@ -139,7 +123,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Разгон — набор оборотов на высокой педали/дросселе (ползунок %). Мелкие нажатия отбрасываются. Ползунок оборотов задаёт окно: участок должен в него зайти, график режется по этому диапазону.</p>
+      <p class="hint" id="columnHint">Авто-WOT: педаль/дроссель не меняется и выше порога, обороты растут минимум на выбранную Δ. Один ползунок — граница WOT, второй — минимальный набор об/мин.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -148,6 +132,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=55"></script>
+  <script src="app.js?v=57"></script>
 </body>
 </html>
