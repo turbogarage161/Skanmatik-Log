@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=17"></script>
+  <script src="sm2.js?v=18"></script>
 </head>
 <body>
   <div class="app">
@@ -125,6 +125,13 @@
             <option value="vehicle_accel">Ускорение авто (если есть скорость)</option>
           </select>
         </label>
+        <label class="check-row" title="На механике RPM ∝ скорости. На АКПП гидротрансформатор проскальзывает — снимите галочку.">
+          <input type="checkbox" id="speedLock" checked />
+          <span>
+            <strong>Уточнение по скорости</strong>
+            <span class="muted">жёсткая передача · выкл. на АКПП (проскальзывание ГТ)</span>
+          </span>
+        </label>
         <div class="actions">
           <button type="button" class="btn" id="reanalyzeBtn">Пересчитать</button>
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
@@ -139,6 +146,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=40"></script>
+  <script src="app.js?v=41"></script>
 </body>
 </html>

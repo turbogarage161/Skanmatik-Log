@@ -476,6 +476,123 @@ function attachDynoIndex(points, opts = {}) {
   };
 }
 
+/** Заполнить короткие NaN в ряде (время в секундах, дыра <1.2 с). */
+function interpFiniteSeries(time, y) {
+  const out = y ? y.slice() : [];
+  if (!time || out.length !== time.length) return out;
+  for (let i = 1; i < out.length; i++) {
+    if (Number.isFinite(out[i])) continue;
+    if (!Number.isFinite(out[i - 1])) continue;
+    let j = i + 1;
+    while (j < out.length && !Number.isFinite(out[j])) j++;
+    if (j >= out.length) break;
+    const span = time[j] - time[i - 1];
+    if (!(span > 0) || span > 1.2) {
+      i = j;
+      continue;
+    }
+    for (let k = i; k < j; k++) {
+      const u = (time[k] - time[i - 1]) / span;
+      out[k] = out[i - 1] + u * (out[j] - out[i - 1]);
+    }
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * Уточнение по скорости при жёсткой передаче: RPM ≈ k · VSS.
+ * dRPM/dt смешивается с k·dv/dt — меньше ступенек OBD.
+ * На АКПП гидротрансформатор проскальзывает (k плавает) — галочку снять.
+ */
+function applySpeedGearLock(points, opts = {}) {
+  const meta = {
+    applied: false,
+    usable: false,
+    locked: false,
+    gearKv: NaN,
+    cv: NaN,
+    coverage: 0,
+    weight: 0,
+  };
+  if (!points?.length) return meta;
+
+  const time = points.map((p) => p.t);
+  const rpm = points.map((p) => p.rpm);
+  let speed = points.map((p) => (Number.isFinite(p.speed) ? p.speed : NaN));
+  speed = interpFiniteSeries(time, speed);
+  for (let i = 0; i < points.length; i++) {
+    if (Number.isFinite(speed[i])) points[i].speed = speed[i];
+  }
+
+  const ratios = [];
+  for (let i = 0; i < points.length; i++) {
+    if (speed[i] > 8 && rpm[i] > 800) ratios.push(rpm[i] / speed[i]);
+  }
+  meta.coverage = ratios.length / points.length;
+  meta.gearKv = medianOf(ratios);
+  if (ratios.length >= 4 && meta.gearKv > 1) {
+    const varr = ratios.reduce((s, x) => s + (x - meta.gearKv) ** 2, 0) / ratios.length;
+    meta.cv = Math.sqrt(varr) / meta.gearKv;
+  }
+  meta.usable = meta.coverage >= 0.4 && meta.gearKv > 8 && meta.gearKv < 250;
+  meta.locked = meta.usable && Number.isFinite(meta.cv) && meta.cv < 0.12;
+
+  const dtWin = opts.dtWindow ?? 0.2;
+  const win = Math.max(1, opts.smoothWindow | 0);
+  const vMs = speed.map((s) => (s > 0 ? s / 3.6 : NaN));
+  const aCl = computeAccelSeries(time, vMs, { dtWindow: dtWin, smoothWindow: win }, "classic");
+  const aLk = computeAccelSeries(time, vMs, { dtWindow: dtWin, smoothWindow: win }, "link");
+  for (let i = 0; i < points.length; i++) {
+    if (!Number.isFinite(points[i].vehAccel) && Number.isFinite(aCl[i])) points[i].vehAccel = aCl[i];
+    if (!Number.isFinite(points[i].vehAccelLink) && Number.isFinite(aLk[i])) points[i].vehAccelLink = aLk[i];
+  }
+
+  if (!opts.speedLock || !meta.usable) return meta;
+
+  const rpmEq = speed.map((s) => (s > 3 ? s * meta.gearKv : NaN));
+  const eqCl = computeAccelSeries(time, rpmEq, { dtWindow: dtWin, smoothWindow: win }, "classic");
+  const eqLk = computeAccelSeries(time, rpmEq, { dtWindow: dtWin, smoothWindow: win }, "link");
+  const w = meta.locked ? 0.62 : 0.35;
+  const blend = (a, b) => {
+    if (Number.isFinite(a) && Number.isFinite(b) && b > 0) return (1 - w) * a + w * b;
+    if (Number.isFinite(b) && b > 0) return b;
+    return a;
+  };
+  for (let i = 0; i < points.length; i++) {
+    points[i].rpmAccelRaw = points[i].rpmAccel;
+    points[i].rpmAccelLinkRaw = points[i].rpmAccelLink;
+    points[i].rpmAccel = blend(points[i].rpmAccel, eqCl[i]);
+    points[i].rpmAccelLink = blend(points[i].rpmAccelLink, eqLk[i]);
+    points[i].rpmEq = rpmEq[i];
+  }
+  meta.applied = true;
+  meta.weight = w;
+  return meta;
+}
+
+function pullHasUsableSpeed(pull) {
+  const sp = pull?.overview?.speed;
+  if (!sp?.length) return false;
+  const n = sp.filter((s) => Number.isFinite(s) && s > 8).length;
+  return n / sp.length >= 0.4;
+}
+
+function timeAtValue(time, values, target) {
+  if (!time?.length || !values?.length || !Number.isFinite(target)) return null;
+  if (Number.isFinite(values[0]) && values[0] >= target) return time[0];
+  for (let i = 1; i < values.length; i++) {
+    const a = values[i - 1];
+    const b = values[i];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (b < target) continue;
+    if (b <= a) return time[i];
+    const u = (target - a) / (b - a);
+    return time[i - 1] + u * (time[i] - time[i - 1]);
+  }
+  return null;
+}
+
 /** Убрать стартовый переход WOT (скачок OBD / прогрев окна). */
 function trimPullTransient(points, warmSec = 0.35) {
   if (!points.length) return [];
@@ -514,7 +631,12 @@ function getSeries(log) {
   if (pMax > 0 && pMax <= 1.5) pedalPct = pedal.map((v) => v * 100);
   else if (pMax > 100 && pMax <= 1023) pedalPct = pedal.map((v) => (v / 1023) * 100);
 
-  return { time, rpm, pedal: pedalPct, speed };
+  let speedOut = speed;
+  if (speedOut) {
+    speedOut = interpFiniteSeries(time, speedOut.map((s) => (Number.isFinite(s) ? s : NaN)));
+  }
+
+  return { time, rpm, pedal: pedalPct, speed: speedOut };
 }
 
 function findPulls(log, opts) {
@@ -570,6 +692,7 @@ function findPulls(log, opts) {
     if (points.length < 4) continue;
 
     const dyno = attachDynoIndex(points, { dtWindow: dtWin, smoothWindow: win });
+    const lock = applySpeedGearLock(points, opts);
     pulls.push({
       id: `${log.id}-p${pulls.length + 1}`,
       logId: log.id,
@@ -588,11 +711,13 @@ function findPulls(log, opts) {
       metricsDyno: dyno.metricsDyno,
       dynoSource: dyno.source,
       dynoUnit: dyno.unit,
-      gearKv: dyno.gearKv,
+      gearKv: Number.isFinite(lock.gearKv) ? lock.gearKv : dyno.gearKv,
+      speedLock: lock,
       overview: {
         time: time.slice(a, b + 1),
         rpm: rpm.slice(a, b + 1),
         pedal: pedal.slice(a, b + 1),
+        speed: speed ? speed.slice(a, b + 1) : null,
         tOffset: time[a],
       },
     });
@@ -672,6 +797,7 @@ function optsFromUi() {
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
     metric: $("metric").value,
+    speedLock: !!$("speedLock")?.checked,
   };
 }
 
@@ -700,7 +826,13 @@ function addWotsFromSession(session, fileName, opts) {
       timeCol: 0,
       rpmCol: 1,
       pedalCol: 2,
-      speedCol: wot.meta?.hasSpeed && wot.headers.length >= 4 ? 3 : -1,
+      speedCol: (() => {
+        const byName = wot.headers.findIndex((h) => scoreHeader(h, SPEED_KEYS) >= 40);
+        if (byName >= 0) return byName;
+        if (wot.meta?.hasSpeed && wot.headers.length >= 4) return 3;
+        if (wot.rows?.some((r) => r.length >= 4 && Number.isFinite(r[3]))) return 3;
+        return -1;
+      })(),
       pulls: [],
       colorBase: COLORS[colorIdx % COLORS.length],
       rawName: fileName,
@@ -816,6 +948,7 @@ function makePullFromAll(log) {
     });
   }
   const dyno = attachDynoIndex(points, { dtWindow: dtWin, smoothWindow: win });
+  const lock = applySpeedGearLock(points, opts);
   return {
     id: `${log.id}-p1`,
     logId: log.id,
@@ -834,11 +967,13 @@ function makePullFromAll(log) {
     metricsDyno: dyno.metricsDyno,
     dynoSource: dyno.source,
     dynoUnit: dyno.unit,
-    gearKv: dyno.gearKv,
+    gearKv: Number.isFinite(lock.gearKv) ? lock.gearKv : dyno.gearKv,
+    speedLock: lock,
     overview: {
       time: time.slice(),
       rpm: rpm.slice(),
       pedal: pedal.slice(),
+      speed: speed ? speed.slice() : null,
       tOffset: time[0],
     },
   };
@@ -964,7 +1099,10 @@ function renderColumnMap() {
         ". "
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
-    (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}»` : "");
+    (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
+    (optsFromUi().speedLock
+      ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
+      : ". Уточнение по скорости выкл.");
 }
 
 function metricValue(p, metric, mode = "classic") {
@@ -1346,26 +1484,42 @@ function timeAtRpm(ov, targetRpm) {
   return null;
 }
 
-function buildAlignedSeries(selected, refRpm) {
+function buildAlignedSeries(selected, refRpm, opts = {}) {
+  const wantSpeed = !!opts.speedLock && selected.every(pullHasUsableSpeed);
+  let refSpeed = NaN;
+  if (wantSpeed) {
+    const starts = selected.map((p) => {
+      const s0 = p.overview.speed.find((v) => Number.isFinite(v) && v > 0);
+      return Number.isFinite(s0) ? s0 : NaN;
+    }).filter((v) => Number.isFinite(v));
+    if (starts.length) refSpeed = Math.max(...starts);
+  }
+  const useSpeed = wantSpeed && Number.isFinite(refSpeed) && refSpeed > 3;
+
   const series = [];
   for (const pull of selected) {
     const ov = pull.overview;
     if (!ov || !ov.time || !ov.time.length) continue;
-    const tSync = timeAtRpm(ov, refRpm);
+    const tSync = useSpeed
+      ? (timeAtValue(ov.time, ov.speed, refSpeed) ?? timeAtRpm(ov, refRpm))
+      : timeAtRpm(ov, refRpm);
     if (tSync == null) continue;
     const rpmPts = [];
     const pedPts = [];
+    const spdPts = [];
     for (let i = 0; i < ov.time.length; i++) {
-      if (ov.rpm[i] + 15 < refRpm && ov.time[i] < tSync) continue;
+      if (!useSpeed && ov.rpm[i] + 15 < refRpm && ov.time[i] < tSync) continue;
+      if (useSpeed && Number.isFinite(ov.speed?.[i]) && ov.speed[i] + 1 < refSpeed && ov.time[i] < tSync) continue;
       const x = +(ov.time[i] - tSync).toFixed(3);
       if (x < -0.05) continue;
       rpmPts.push({ x, y: ov.rpm[i] });
       pedPts.push({ x, y: ov.pedal[i] });
+      if (ov.speed) spdPts.push({ x, y: ov.speed[i] });
     }
     if (rpmPts.length < 2) continue;
-    series.push({ pull, rpmPts, pedPts });
+    series.push({ pull, rpmPts, pedPts, spdPts, useSpeed, refSpeed });
   }
-  return series;
+  return { series, useSpeed, refSpeed };
 }
 
 function setAccelTab(tab) {
@@ -1533,10 +1687,15 @@ function renderCharts() {
   }
 
   const refRpm = alignRefRpm(selected);
-  const aligned = buildAlignedSeries(selected, refRpm);
+  const alignedPack = buildAlignedSeries(selected, refRpm, opts);
+  const aligned = alignedPack.series || [];
   const overDatasets = [];
-  const showPedal = selected.length <= 2;
-  for (const { pull, rpmPts, pedPts } of aligned) {
+  const showSpeed = aligned.some((s) => s.spdPts?.some((p) => Number.isFinite(p.y) && p.y > 0));
+  const showPedal = !showSpeed && selected.length <= 2;
+  const spdMax = showSpeed
+    ? Math.max(80, ...aligned.flatMap((s) => s.spdPts.map((p) => p.y).filter(Number.isFinite)))
+    : 110;
+  for (const { pull, rpmPts, pedPts, spdPts } of aligned) {
     overDatasets.push({
       label: pull.name,
       data: rpmPts,
@@ -1547,7 +1706,19 @@ function renderCharts() {
       borderWidth: 2.5,
       parsing: false,
     });
-    if (showPedal) {
+    if (showSpeed && spdPts?.length) {
+      overDatasets.push({
+        label: `${pull.name} · км/ч`,
+        data: spdPts,
+        yAxisID: "y1",
+        borderColor: pull.color,
+        backgroundColor: pull.color,
+        pointRadius: 0,
+        borderWidth: 1.6,
+        borderDash: [4, 3],
+        parsing: false,
+      });
+    } else if (showPedal) {
       overDatasets.push({
         label: `${pull.name} · педаль`,
         data: pedPts,
@@ -1575,7 +1746,9 @@ function renderCharts() {
           type: "linear",
           title: {
             display: true,
-            text: `Время от ${Math.round(refRpm)} об/мин, с`,
+            text: alignedPack.useSpeed
+              ? `Время от ${Math.round(alignedPack.refSpeed)} км/ч, с`
+              : `Время от ${Math.round(refRpm)} об/мин, с`,
             color: "#9aa6b5",
           },
           ticks: {
@@ -1587,10 +1760,14 @@ function renderCharts() {
         y: rpmYAxisOpts(),
         y1: {
           position: "right",
-          display: showPedal,
+          display: showPedal || showSpeed,
           min: 0,
-          max: 110,
-          title: { display: showPedal, text: "педаль %", color: "#9aa6b5" },
+          max: showSpeed ? Math.ceil(spdMax / 10) * 10 : 110,
+          title: {
+            display: showPedal || showSpeed,
+            text: showSpeed ? "скорость, км/ч" : "педаль %",
+            color: "#9aa6b5",
+          },
           ticks: { color: "#9aa6b5" },
           grid: { drawOnChartArea: false },
         },
@@ -1610,22 +1787,29 @@ function renderCharts() {
     },
   });
 
+  const lockOn = selected.some((p) => p.speedLock?.applied);
+  const lockSlip = selected.some((p) => p.speedLock?.usable && p.speedLock?.cv > 0.12);
   $("overviewHint").textContent = selected.length > 1
-    ? `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? "" : " · только обороты"}`
+    ? (alignedPack.useSpeed
+      ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showSpeed ? " · скорость пунктиром" : ""}`
+      : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? "" : (showSpeed ? " · скорость пунктиром" : " · только обороты")}`)
     : selected[0].name;
   if (accelTab === "dyno") {
     const src = selected[0]?.dynoSource;
     $("compareHint").textContent = selected.length > 1
       ? `Мощность · отн. P/m · выше кривая = сильнее на этих об/мин`
       : (src === "rpm"
-        ? "Мощность без VSS: P/m ∝ (dRPM/dt)·RPM; для Вт/кг включите скорость в логе"
+        ? "Мощность без VSS: P/m ∝ (dRPM/dt)·RPM; для Вт/кг нужен канал скорости"
         : "Мощность: P/m = a·v [Вт/кг] — выше = сильнее на этих оборотах");
   } else {
-    $("compareHint").textContent = selected.length > 1
+    let hint = selected.length > 1
       ? `Сравнение ${selected.length} прогонов · ${accelTab === "classic" ? "ускорение dRPM/dt" : "полка момента (Link)"}`
       : (accelTab === "classic"
         ? "Ускорение оборотов: сглаживание + dRPM/dt между соседними точками"
         : "Полка момента: Link dt + сглаживание по оборотам");
+    if (lockOn) hint += " · уточнено по VSS (жёсткая передача)";
+    else if (opts.speedLock && lockSlip) hint += " · VSS есть, k плавает — похоже на проскальзывание ГТ";
+    $("compareHint").textContent = hint;
   }
   $("exportBtn").disabled = selected.length !== 1;
   $("pngBtn").disabled = false;
@@ -1705,13 +1889,19 @@ function renderStats() {
     </tr></thead>
     <tbody>${rows}</tbody>
   </table>
-  <p class="hint" style="margin-top:8px">Активная вкладка: <b>${modeLabel}</b>. ${mode === "classic" ? "Сырое ускорение оборотов (dRPM/dt)." : "Полка момента (Link)."} Ось об/мин — шаг 250.</p>`;
+  <p class="hint" style="margin-top:8px">Активная вкладка: <b>${modeLabel}</b>. ${mode === "classic" ? "Сырое ускорение оборотов (dRPM/dt)." : "Полка момента (Link)."} Ось об/мин — шаг 250.${
+    selected.some((p) => p.speedLock?.applied)
+      ? " Уточнение по скорости включено: dRPM/dt смешан с k·dv/dt."
+      : (selected.some((p) => p.speedLock?.usable)
+        ? " Канал скорости загружен. Галочка «уточнение по скорости» смешает полку с VSS (на АКПП снимите)."
+        : "")
+  }</p>`;
 }
 
 function exportSelectedCsv() {
   const pull = selectedPulls()[0];
   if (!pull) return;
-  const headers = ["t_rel_s", "rpm", "pedal_pct", "rpm_accel_time", "rpm_accel_link", "speed", "veh_accel_ms2", "p_spec", "f_spec"];
+  const headers = ["t_rel_s", "rpm", "pedal_pct", "rpm_accel_time", "rpm_accel_link", "speed", "rpm_eq", "veh_accel_ms2", "p_spec", "f_spec"];
   const lines = [headers.join(";")];
   for (const p of pull.points) {
     lines.push([
@@ -1721,6 +1911,7 @@ function exportSelectedCsv() {
       fmt(p.rpmAccel, 2),
       fmt(p.rpmAccelLink, 2),
       p.speed == null ? "" : fmt(p.speed, 2),
+      Number.isFinite(p.rpmEq) ? fmt(p.rpmEq, 1) : "",
       p.vehAccel == null ? "" : fmt(p.vehAccel, 3),
       Number.isFinite(p.pSpec) ? fmt(p.pSpec, 4) : "",
       Number.isFinite(p.fSpec) ? fmt(p.fSpec, 4) : "",
@@ -1769,6 +1960,13 @@ $("clearBtn").addEventListener("click", clearAll);
 $("exportBtn").addEventListener("click", exportSelectedCsv);
 $("pngBtn").addEventListener("click", savePng);
 $("metric").addEventListener("change", () => { renderCharts(); });
+const speedLockEl = $("speedLock");
+if (speedLockEl) {
+  speedLockEl.addEventListener("change", () => {
+    if (logs.length || sm2Sources.length) reanalyzeAll();
+    else renderColumnMap();
+  });
+}
 
 function syncDualRange(minEl, maxEl, fillEl, labelEl, fmt, minGap) {
   if (!minEl || !maxEl) return;

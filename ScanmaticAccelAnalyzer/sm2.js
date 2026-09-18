@@ -358,9 +358,32 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     rows.push({ t: a.t / 1000, rpm: rpmVal, pedal, speed });
   }
   rows.sort((a, b) => a.t - b.t);
+  sm2InterpSpeedGaps(rows);
   const clustered = sm2KeepMainTimeCluster(rows);
   sm2SanitizeSpeed(clustered);
   return clustered;
+}
+
+/** Короткие дыры OBD в канале скорости (1–2 кадра, <1.2 с) — линейно. */
+function sm2InterpSpeedGaps(rows) {
+  if (!rows || rows.length < 3) return;
+  for (let i = 1; i < rows.length; i++) {
+    if (Number.isFinite(rows[i].speed)) continue;
+    if (!Number.isFinite(rows[i - 1].speed)) continue;
+    let j = i + 1;
+    while (j < rows.length && !Number.isFinite(rows[j].speed)) j++;
+    if (j >= rows.length) break;
+    const span = rows[j].t - rows[i - 1].t;
+    if (!(span > 0) || span > 1.2) {
+      i = j;
+      continue;
+    }
+    for (let k = i; k < j; k++) {
+      const u = (rows[k].t - rows[i - 1].t) / span;
+      rows[k].speed = rows[i - 1].speed + u * (rows[j].speed - rows[i - 1].speed);
+    }
+    i = j;
+  }
 }
 
 /**
@@ -713,10 +736,11 @@ function parseSm2ArrayBuffer(buffer) {
 
     const speedName = names.find((n) => sm2NameScore(n.name, SM2_SPEED_KEYS) >= 40)?.name || null;
     const hasSpeed = samples.some((r) => Number.isFinite(r.speed));
-    const headers = hasSpeed
+    const keepSpeedCol = !!(speedName || hasSpeed);
+    const headers = keepSpeedCol
       ? ["Time", rpmName, pedalName, speedName || "Скорость"]
       : ["Time", rpmName, pedalName];
-    const rows = samples.map((r) => (hasSpeed
+    const rows = samples.map((r) => (keepSpeedCol
       ? [r.t, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
       : [r.t, r.rpm, r.pedal]));
     const duration = rows.length ? rows[rows.length - 1][0] - rows[0][0] : 0;
@@ -734,7 +758,7 @@ function parseSm2ArrayBuffer(buffer) {
         tocIndex: s,
         filetime: tocEntry?.filetime ?? null,
         duration,
-        hasSpeed,
+        hasSpeed: keepSpeedCol,
       },
     });
   }
@@ -761,10 +785,12 @@ function sm2SessionToWotPulls(session, opts) {
   if (!pulls.length) return [];
   for (const pull of pulls) sm2SanitizeSpeed(pull.rows);
 
-  const hasSpeed = session.meta?.hasSpeed || samples.some((r) => Number.isFinite(r.speed));
-  const headers = hasSpeed && session.headers.length >= 4
+  const keepSpeed = session.headers.length >= 4
+    || session.meta?.hasSpeed
+    || samples.some((r) => Number.isFinite(r.speed));
+  const headers = keepSpeed && session.headers.length >= 4
     ? session.headers
-    : hasSpeed
+    : keepSpeed
       ? [...session.headers.slice(0, 3), "Скорость"]
       : session.headers;
 
@@ -775,16 +801,16 @@ function sm2SessionToWotPulls(session, opts) {
       : session.label;
     return {
       headers,
-      rows: pull.rows.map((r) => (hasSpeed
+      rows: pull.rows.map((r) => (keepSpeed
         ? [r.t - t0, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
         : [r.t - t0, r.rpm, r.pedal])),
-      absRows: pull.rows.map((r) => (hasSpeed
+      absRows: pull.rows.map((r) => (keepSpeed
         ? [r.t, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
         : [r.t, r.rpm, r.pedal])),
       label,
       meta: {
         ...session.meta,
-        hasSpeed,
+        hasSpeed: keepSpeed,
         fullThr: pull.fullThr,
         maxPedal: pull.maxPedal,
         wotDuration: pull.dur,

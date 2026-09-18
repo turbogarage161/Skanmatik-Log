@@ -345,6 +345,32 @@ input, select {
   margin-bottom: 12px;
 }
 
+.check-row {
+  flex-direction: row !important;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.check-row input[type="checkbox"] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.check-row strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.check-row .muted {
+  display: block;
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
 .dual-head {
   display: flex;
   align-items: baseline;
