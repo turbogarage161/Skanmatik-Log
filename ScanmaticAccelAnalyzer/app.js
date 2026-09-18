@@ -572,6 +572,12 @@ function applySpeedGearLock(points, opts = {}) {
 }
 
 function pullHasUsableSpeed(pull) {
+  if (pull?.speedLock?.usable || pull?.speedLock?.applied) return true;
+  const pts = pull?.points;
+  if (pts?.length) {
+    const n = pts.filter((p) => Number.isFinite(p.speed) && p.speed > 8).length;
+    return n / pts.length >= 0.4;
+  }
   const sp = pull?.overview?.speed;
   if (!sp?.length) return false;
   const n = sp.filter((s) => Number.isFinite(s) && s > 8).length;
