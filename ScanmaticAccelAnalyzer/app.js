@@ -842,7 +842,6 @@ function sm2WotOpts(opts) {
     pedalMin: opts.pedalMin,
     pedalMax: opts.pedalMax,
     minDuration: opts.minDuration,
-    minRpmGain: 200,
     rpmMin: opts.rpmMin,
     rpmMax: opts.rpmMax,
     rpmBandLo: opts.rpmMin,

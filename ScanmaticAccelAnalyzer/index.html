@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css?v=3" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=22"></script>
+  <script src="sm2.js?v=23"></script>
 </head>
 <body>
   <div class="app">
@@ -139,7 +139,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Ищутся все разгоны на одной передаче по росту оборотов. Педаль/дроссель отсекает холостой ход и обрезает плато WOT; ползунок — окно, а не жёсткий порог 70%. Обороты — гистерезис.</p>
+      <p class="hint" id="columnHint">Разгон — набор оборотов на высокой педали/дросселе (ползунок %). Мелкие нажатия отбрасываются. Ползунок оборотов задаёт окно: участок должен в него зайти, график режется по этому диапазону.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -148,6 +148,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=54"></script>
+  <script src="app.js?v=55"></script>
 </body>
 </html>

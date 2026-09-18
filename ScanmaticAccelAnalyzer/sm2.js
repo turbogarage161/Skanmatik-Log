@@ -544,16 +544,36 @@ function sm2MeetsMinDur(dur, minDur, medDt = 0.12, n = 0) {
 }
 
 /**
- * Ползунки оборотов — гистерезис: разгон должен пройти через окно [lo, hi].
- * Не обрезает участок: проверка только «проходит ли набор оборотов сквозь окно».
+ * Ползунки оборотов: участок должен реально зайти в окно [lo, hi],
+ * не «зацепить» его на 50 об/мин.
  */
 function sm2PassesRpmWindow(rpm0, rpm1, lo = 1000, hi = 8000) {
   if (!Number.isFinite(rpm0) || !Number.isFinite(rpm1) || !(hi > lo)) return false;
   const a = Math.min(rpm0, rpm1);
   const b = Math.max(rpm0, rpm1);
   const overlap = Math.min(b, hi) - Math.max(a, lo);
-  const need = Math.min(80, Math.max(40, (hi - lo) * 0.08));
-  return overlap >= need;
+  if (!(overlap > 0)) return false;
+  const span = b - a;
+  const win = hi - lo;
+  const need = Math.min(span, Math.max(350, Math.min(900, win * 0.18)));
+  return overlap >= need - 1;
+}
+
+/** Оставить кадры участка, чьи обороты попадают в окно фильтра. */
+function sm2CropToRpmWindow(rows, a, b, lo, hi) {
+  if (!(b > a)) return null;
+  let s = -1;
+  let e = -1;
+  for (let i = a; i <= b; i++) {
+    const r = rows[i].rpm;
+    if (!Number.isFinite(r)) continue;
+    if (r >= lo - 20 && r <= hi + 20) {
+      if (s < 0) s = i;
+      e = i;
+    }
+  }
+  if (s < 0 || e - s < 2) return null;
+  return { a: s, b: e };
 }
 
 /** @deprecated имя; то же, что sm2PassesRpmWindow */
@@ -614,10 +634,10 @@ function sm2BurstLoadFloor(rows, from, to, pedalMinReq, pedalMax) {
   const plateau = sm2HasPedalPlateau(rows, from, to, maxP);
   if (maxP >= pedalMinReq) {
     if (plateau) {
-      const tight = Math.max(pedalMinReq, Math.min(maxP - 3.5, maxP * 0.92));
-      return { floor: tight, maxP, plateau: true };
+      return { floor: pedalMinReq, maxP, plateau: true };
     }
-    return { floor: Math.max(36, Math.min(pedalMinReq, maxP * 0.55)), maxP, plateau: false };
+    const ramp = Math.min(pedalMinReq, Math.max(pedalMinReq * 0.55, maxP * 0.62));
+    return { floor: ramp, maxP, plateau: false };
   }
   return {
     floor: Math.max(28, Math.min(pedalMinReq, maxP * 0.50)),
@@ -651,18 +671,13 @@ function sm2TrimStompAndLift(rows, from, to, floor, maxP, plateau) {
   let e = to;
   while (s < e - 2) {
     const p = rows[s].pedal;
-    const prev = s > 0 && sm2Ok(rows[s - 1].pedal) ? rows[s - 1].pedal : p;
-    const next = sm2Ok(rows[s + 1]?.pedal) ? rows[s + 1].pedal : p;
-    const below = !sm2Ok(p) || p < floor - 1.5;
-    const stomping = plateau && sm2Ok(p) && sm2Ok(prev) && p - prev > 8 && p + 2 < maxP;
-    const almostMax = plateau && sm2Ok(p) && p < maxP - 2.5 && sm2Ok(next) && next >= maxP - 1.2;
-    if (below || stomping || almostMax) s++;
+    if (!sm2Ok(p) || p < floor - 1.5) s++;
     else break;
   }
   while (e > s + 2) {
     const p = rows[e].pedal;
     const prev = rows[e - 1].pedal;
-    if (!sm2Ok(p) || p < floor - 1.5 || (sm2Ok(prev) && prev - p > 8)) e--;
+    if (!sm2Ok(p) || p < floor - 1.5 || (sm2Ok(prev) && prev - p > 12 && p < floor)) e--;
     else break;
   }
   if (e - s < 2) return { a: from, b: to };
@@ -768,41 +783,33 @@ function sm2BurstPedalMax(rows, from, to) {
 }
 
 /**
- * Педаль/дроссель — не единственный ключ поиска.
- * Ползунок 70–100 пропускает WOT; локально рабочий газ (~32%+) и разгон по скорости тоже идут в список.
- * Холостой 16–27% без прироста км/ч и раскатка перед плато 86% в той же вспышке — нет.
+ * Педаль/дроссель — жёсткий допуск по ползунку.
+ * Если в логе максимум ниже ползунка (телефон 50%), порог опускается к этому максимуму.
+ * Короткие «нажатия» 30–45% при живом WOT в файле не берутся.
  */
-function sm2PedalAdmitsPull(ped, { pedalMinReq, pedalMax, gain, rps, speedRise, burstMaxP }) {
-  if (!ped || ped.n < 2) return false;
-  const { min: pMin, med: pMed, max: pMax, vals } = ped;
-  const highFloor = Math.min(pedalMinReq, pMax * 0.55);
-  const highN = vals.filter((v) => v >= highFloor && v <= pedalMax + 1.5).length;
-  const inBand = pMax >= pedalMinReq - 0.5
-    && highN >= 2
-    && (pMed >= 28 || highN >= Math.max(3, ped.n * 0.4));
-  const localWork = pMax >= 32
-    && pMed >= Math.max(20, pMax * 0.42)
-    && (gain >= 350 || rps >= 140 || speedRise >= 8);
-  const speedProven = speedRise >= 12 && gain >= 400 && pMax >= 16 && pMed >= Math.min(12, Math.max(pMin, pMax * 0.25));
-  if (!inBand && !localWork && !speedProven) return false;
-  // Раскатка на малом газе в той же вспышке, где уже есть настоящее плато WOT.
-  if (Number.isFinite(burstMaxP) && burstMaxP >= 70 && pMax < 45 && pMax < burstMaxP * 0.62 && speedRise < 10) {
-    return false;
+function sm2EffectivePedalMin(sessionMax, pedalMinReq) {
+  if (Number.isFinite(sessionMax) && sessionMax < pedalMinReq && sessionMax >= 40) {
+    return Math.max(40, sessionMax * 0.82);
   }
+  return pedalMinReq;
+}
+
+function sm2PedalAdmitsPull(ped, { pedalMinReq, pedalMax }) {
+  if (!ped || ped.n < 2) return false;
+  const { med: pMed, max: pMax, vals } = ped;
+  const highN = vals.filter((v) => v >= pedalMinReq - 0.5 && v <= pedalMax + 1.5).length;
+  if (pMax < pedalMinReq - 0.5) return false;
+  if (pMax > pedalMax + 1.5) return false;
+  if (highN < 3 && !(highN >= 2 && pMed >= pedalMinReq * 0.75)) return false;
   return true;
 }
 
 function sm2NoPedalAdmitsPull(rows, a, b, { gain, rps, n, rpm0, rpm1 }) {
-  if (rpm1 < 1900 && rpm0 < 1200) return false;
-  if (rpm1 < 2000 && gain < 500) return false;
-  const load = sm2SegLoadStats(rows, a, b);
-  if (load && load.max >= 8) {
-    const loaded = load.med >= 55 || load.max >= 80 || (load.max - load.min >= 15 && load.med >= 40);
-    if (loaded && gain >= 300 && rps >= 120 && n >= 6) return true;
-  }
-  if (gain >= 320 && rps >= 150 && n >= 8 && rpm1 >= 2000) return true;
-  if (gain >= 600 && rps >= 180 && n >= 6 && rpm1 >= 1800) return true;
-  return false;
+  if (rpm1 < 2400 && rpm0 < 1600) return false;
+  if (gain < 700) return false;
+  if (n < 8 && gain < 1200) return false;
+  if (rps < 120) return false;
+  return true;
 }
 
 /** Обрезка отображения: плато WOT / высокая рампа. Частичный газ — весь набор оборотов. */
@@ -821,21 +828,19 @@ function sm2MaybeCropDisplay(rows, a, b, pedalMinReq, pedalMax) {
 
 /**
  * Все непрерывные разгоны на одной передаче.
- * 1) вспышки записи (пауза телефона ≠ один разгон);
- * 2) внутри вспышки — передачи;
- * 3) все наборы оборотов; педаль/скорость только квалифицируют, не прячут соседний разгон.
- * Ползунки оборотов — гистерезис. На график — WOT-удержание (плато) или весь набор.
- * @returns {Array<{ a, b, rows, fullThr, maxPedal, dur, gain, score, hasPedal }>}
+ * Ищем удержание высокой педали/дросселя (ползунок), затем полный набор оборотов на передаче.
+ * Мелкие нажатия 30–45% не берутся. Обороты — окно фильтра: участок должен зайти в него,
+ * на график режется по [rpmMin, rpmMax].
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 4) return [];
   const pedals = rows.map((r) => r.pedal).filter((v) => sm2Ok(v));
   const hasPedal = pedals.length > 0;
   const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
-  const pedalMinReq = opts.pedalMin ?? opts.fullFloor ?? 70;
+  const pedalMinReq = sm2EffectivePedalMin(maxPedal, opts.pedalMin ?? opts.fullFloor ?? 70);
   const pedalMax = opts.pedalMax ?? 100;
   const minDur = opts.minDuration ?? 3;
-  const minRpmGain = opts.minRpmGain ?? 200;
+  const minRpmGain = opts.minRpmGain ?? 600;
   const rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 1000;
   const rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 8000;
   const gapSec = opts.gapSec ?? SM2_GAP_SEC;
@@ -843,52 +848,42 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const minRps = opts.minRps ?? (hasPedal ? 40 : 80);
 
   const candidates = [];
-  const considerSeg = (seg, burst) => {
-    const a0 = seg.a;
-    const b0 = seg.b;
-    if (b0 - a0 < 2) return;
-    const n0 = b0 - a0 + 1;
-    const dur0 = rows[b0].t - rows[a0].t;
-    const rpm0 = rows[a0].rpm;
-    const rpm1raw = rows[b0].rpm;
+  const considerSeg = (seg) => {
+    let a = seg.a;
+    let b = seg.b;
+    if (b - a < 2) return;
+    const n0 = b - a + 1;
+    const dur0 = rows[b].t - rows[a].t;
+    const rpm0 = rows[a].rpm;
+    const rpm1raw = rows[b].rpm;
     const gain0 = rpm1raw - rpm0;
-    const medDt = sm2SegMedDt(rows, a0, b0);
+    const medDt = sm2SegMedDt(rows, a, b);
     const rps0 = dur0 > 1e-6 ? gain0 / dur0 : 0;
-    const speedRise = sm2SegSpeedRise(rows, a0, b0);
-    const ped0 = hasPedal ? sm2SegPedalStats(rows, a0, b0) : null;
-    const needGain = hasPedal ? minRpmGain : Math.max(minRpmGain, 300);
-    const strong = hasPedal
-      ? (gain0 >= 400 && rps0 >= 130 && n0 >= 4)
-      : (gain0 >= 300 && rps0 >= 180 && n0 >= 8);
-    const veryStrong = gain0 >= 600 && rps0 >= 180 && n0 >= 3;
+    const ped0 = hasPedal ? sm2SegPedalStats(rows, a, b) : null;
+    const needGain = hasPedal ? minRpmGain : Math.max(minRpmGain, 700);
+    const full = gain0 >= 1200 && rps0 >= 180 && n0 >= 6;
     const durOk = sm2MeetsMinDur(dur0, minDur, medDt, n0);
-    if (!durOk && !strong && !veryStrong && !(speedRise >= 15 && gain0 >= 500)) return;
-    if (dur0 > maxDur && !strong && !veryStrong) return;
-    if (!(gain0 >= needGain)) return;
-    if (rps0 < minRps && !strong && !veryStrong && gain0 < 500 && speedRise < 10) return;
+    if (!durOk && !full) return;
+    if (dur0 > maxDur && !full) return;
+    if (!(gain0 >= needGain) && !full) return;
+    if (rps0 < minRps && !full && gain0 < 900) return;
     if (!sm2PassesRpmWindow(rpm0, rpm1raw, rpmMin, rpmMax)) return;
     if (hasPedal) {
-      const burstMaxP = burst ? sm2BurstPedalMax(rows, burst.a, burst.b) : maxPedal;
-      if (!sm2PedalAdmitsPull(ped0, { pedalMinReq, pedalMax, gain: gain0, rps: rps0, speedRise, burstMaxP })) return;
-    } else if (!sm2NoPedalAdmitsPull(rows, a0, b0, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1: rpm1raw })) {
+      if (!sm2PedalAdmitsPull(ped0, { pedalMinReq, pedalMax })) return;
+    } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1: rpm1raw })) {
       return;
     }
 
-    let a = a0;
-    let b = b0;
-    if (hasPedal) {
-      const cropped = sm2MaybeCropDisplay(rows, a0, b0, pedalMinReq, pedalMax);
-      if (cropped && cropped.b - cropped.a >= 2) {
-        const cGain = rows[cropped.b].rpm - rows[cropped.a].rpm;
-        if (cGain >= 150) {
-          a = cropped.a;
-          b = cropped.b;
-        }
-      }
+    const croppedRpm = sm2CropToRpmWindow(rows, a, b, rpmMin, rpmMax);
+    if (croppedRpm) {
+      a = croppedRpm.a;
+      b = croppedRpm.b;
     }
+    if (b - a < 2) return;
+    const gain = rows[b].rpm - rows[a].rpm;
+    if (gain < 200) return;
     const n = b - a + 1;
     const dur = rows[b].t - rows[a].t;
-    const gain = rows[b].rpm - rows[a].rpm;
     const rps = dur > 1e-6 ? gain / dur : 0;
     const ped = hasPedal ? sm2SegPedalStats(rows, a, b) : ped0;
     const pMax = ped ? ped.max : 0;
@@ -897,23 +892,40 @@ function sm2FindAllWotPulls(rows, opts = {}) {
       b,
       dur,
       gain,
-      score: n * 8 + Math.min(dur, 12) * Math.sqrt(Math.max(gain, 1)) + rps + pMax * 4 + speedRise * 3,
+      score: n * 8 + Math.min(dur, 12) * Math.sqrt(Math.max(gain, 1)) + rps + pMax * 6,
     });
   };
 
-  const considerRange = (from, to, burst) => {
+  const considerRange = (from, to) => {
     if (to - from < 2) return;
     const rising = sm2AllRisingSegments(rows, from, to);
     const longest = sm2LongestRising(rows, from, to);
     const segs = rising.slice();
     if (longest && !segs.some((s) => s.a === longest.a && s.b === longest.b)) segs.push(longest);
-    for (const seg of segs) considerSeg(seg, burst);
+    for (const seg of segs) considerSeg(seg);
   };
 
   const timeBursts = sm2TimeBursts(rows, gapSec);
-  for (const burst of timeBursts) {
-    const gears = sm2SplitByGearAndGap(rows, burst.a, burst.b, gapSec);
-    for (const g of gears) considerRange(g.a, g.b, burst);
+  if (hasPedal) {
+    for (const burst of timeBursts) {
+      const info = sm2BurstLoadFloor(rows, burst.a, burst.b, pedalMinReq, pedalMax);
+      if (!info || info.maxP < pedalMinReq - 0.5) continue;
+      const runs = sm2CollectRuns(rows, burst.a, burst.b, (i) => {
+        const v = rows[i].pedal;
+        return sm2Ok(v) && v >= info.floor && v <= pedalMax + 1.5;
+      });
+      for (const run0 of runs) {
+        const run = sm2TrimStompAndLift(rows, run0.a, run0.b, info.floor, info.maxP, info.plateau);
+        if (run.b - run.a < 2) continue;
+        const gears = sm2SplitByGearAndGap(rows, run.a, run.b, gapSec);
+        for (const g of gears) considerRange(g.a, g.b);
+      }
+    }
+  } else {
+    for (const burst of timeBursts) {
+      const gears = sm2SplitByGearAndGap(rows, burst.a, burst.b, gapSec);
+      for (const g of gears) considerRange(g.a, g.b);
+    }
   }
 
   candidates.sort((x, y) => y.score - x.score);
@@ -924,15 +936,11 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   }
   kept.sort((a, b) => a.a - b.a);
 
-  const usedFloor = hasPedal && Number.isFinite(maxPedal) && maxPedal < pedalMinReq && maxPedal >= 25
-    ? Math.max(28, Math.min(pedalMinReq, maxPedal * 0.68))
-    : pedalMinReq;
-
   return kept.map((c) => ({
     a: c.a,
     b: c.b,
     rows: rows.slice(c.a, c.b + 1),
-    fullThr: usedFloor,
+    fullThr: pedalMinReq,
     maxPedal,
     dur: c.dur,
     gain: c.gain,
