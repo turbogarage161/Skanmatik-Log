@@ -1,16 +1,13 @@
 /**
  * Парсер Scanmatik SMFS (.sm2) — OBD-II Livedata.
  *
- * Поддерживает логи Сканматика с ПК и с Android (телефон): одинаковый
- * контейнер SMFS, разный набор каналов и упаковка кадров.
- *
  * Файл может содержать НЕСКОЛЬКО прогонов (TOC), каждый с FILETIME
  * (подписи как в Сканматике: «17.09.2026 14:43»).
  *
- * 2 канала (компакт, часто Android / короткий OBD):
+ * 2 канала (компакт):
  *   float64 rpm | int32 time_ms | float64 pedal/thr | int32 time2   (24 байта)
  *
- * N>2 каналов (ПК / расширенный Livedata):
+ * N>2 каналов:
  *   на канал: float64 value | int64 time_ms | int64 reserved         (24×N)
  */
 
@@ -61,47 +58,18 @@ function sm2NameScore(name, keys) {
   return best;
 }
 
-const SM2_RPM_KEYS = [
-  "оборот", "rpm", "engine speed", "частота вращения", "коленвал", "engine rpm",
-];
+const SM2_RPM_KEYS = ["оборот", "rpm", "engine speed", "частота вращения", "коленвал", "engine rpm"];
 const SM2_PEDAL_KEYS = [
-  "педаль", "pedal", "accelerator", "акселер", "положение педали", "app",
-  "запрос момента", "accelerator pedal", "pedal position", "relative accelerator",
+  "педаль", "pedal", "accelerator", "акселер", "положение педали", "app", "запрос момента",
+  "accelerator pedal", "pedal position",
 ];
 const SM2_THROTTLE_KEYS = [
-  "дроссел", "throttle", "абсолютное положение дросселя", "положение дросселя",
-  "tps", "throttle position", "absolute throttle",
+  "дроссел", "throttle", "абсолютное положение дросселя", "положение дросселя", "tps",
+  "throttle position", "absolute throttle",
 ];
 const SM2_SPEED_KEYS = [
   "скорость автомобиля", "скорость тс", "vehicle speed", "vss", "скорость", "speed", "км/ч", "km/h",
 ];
-
-function sm2PickNamedChannel(names, chCount, keys) {
-  if (!names?.length || !(chCount > 0)) return -1;
-  let best = -1;
-  let bestS = 39;
-  for (let i = 0; i < names.length && i < chCount; i++) {
-    const s = sm2NameScore(names[i].name, keys);
-    if (s > bestS) { bestS = s; best = i; }
-  }
-  return best;
-}
-
-/** Отсекает денормы / мусор float64, опционально 0..1 → %. */
-function sm2SanitizePct(v, scale01) {
-  if (!sm2Ok(v)) return NaN;
-  if (Math.abs(v) < 1e-8) return 0;
-  if (scale01 && v >= 0 && v <= 1.5) v *= 100;
-  if (v < -0.5 || v > 105) return NaN;
-  return v;
-}
-
-function sm2SanitizeSpeed(v) {
-  if (!sm2Ok(v)) return NaN;
-  if (Math.abs(v) < 1e-8) return 0;
-  if (v < 0 || v > 350) return NaN;
-  return v;
-}
 
 /** TOC: byte@0x10 = count; entries @0x19, 20 bytes each */
 function sm2ParseToc(view, u8) {
@@ -192,10 +160,11 @@ function sm2ExtractCompact2ch(view, from, to) {
     const t2 = sm2ReadI32(view, off + 20);
     if (!sm2Ok(rpm) || rpm < 400 || rpm > 9000) return null;
     if (!Number.isFinite(t) || t < 0 || t > 3_600_000) return null;
-    const pedal = sm2SanitizePct(thr, true);
-    if (!sm2Ok(pedal)) return null;
+    if (!sm2Ok(thr) || thr < -0.5 || thr > 105) return null;
     if (Number.isFinite(t2) && t2 > 0 && t2 < 3_600_000 && Math.abs(t2 - t) > 5000) return null;
-    return { t: t / 1000, rpm, pedal, off };
+    if (thr >= 0 && thr <= 1.5) thr *= 100;
+    if (Math.abs(thr) < 1e-9) thr = 0;
+    return { t: t / 1000, rpm, pedal: thr, off };
   }
 
   function nextFrame(afterOff, tLast) {
@@ -268,112 +237,90 @@ function sm2ExtractCompact2ch(view, from, to) {
   return series.map(({ t, rpm, pedal }) => ({ t, rpm, pedal }));
 }
 
-/** Формат N каналов: кадр = N × (f64, i64 time, i64). ПК и Android. */
+/** Формат N каналов: кадр = N × (f64, i64 time, i64) */
 function sm2ExtractMultiCh(view, from, to, nCh, names) {
-  const namedRpm = sm2PickNamedChannel(names, 64, SM2_RPM_KEYS);
-  const namedPedal = sm2PickNamedChannel(names, 64, SM2_PEDAL_KEYS);
-  const namedThr = sm2PickNamedChannel(names, 64, SM2_THROTTLE_KEYS);
-  const namedSpeed = sm2PickNamedChannel(names, 64, SM2_SPEED_KEYS);
-  const loadNameIdx = namedPedal >= 0 ? namedPedal : namedThr;
-  const scaleLoad01 = loadNameIdx >= 0; // 0..1 → % только если канал назван педаль/дроссель
-
+  const stride = nCh * SM2_SAMPLE;
   const anchors = [];
   for (let off = from; off + SM2_SAMPLE <= to; off += 8) {
     const rpm = sm2ReadF64(view, off);
-    if (!sm2Ok(rpm) || rpm < 400 || rpm > 9000) continue;
-    const t64 = sm2ReadI64(view, off + 8);
-    const t32 = sm2ReadI32(view, off + 8);
-    const t = (sm2Ok(t64) && t64 >= 0 && t64 <= 86_400_000) ? t64
-      : (Number.isFinite(t32) && t32 >= 0 && t32 <= 86_400_000) ? t32
-        : NaN;
-    if (!Number.isFinite(t)) continue;
-    anchors.push({ off, rpm, t });
+    const t = sm2ReadI64(view, off + 8);
+    if (sm2Ok(rpm) && rpm >= 400 && rpm <= 8500 && t >= 50 && t <= 86_400_000) {
+      anchors.push({ off, rpm, t });
+    }
   }
   if (anchors.length < 5) return [];
 
-  const freq = new Map();
+  // медианный шаг между якорями
+  const deltas = [];
   for (let i = 1; i < anchors.length; i++) {
     const d = anchors[i].off - anchors[i - 1].off;
     const dt = anchors[i].t - anchors[i - 1].t;
-    if (d > 0 && d % SM2_SAMPLE === 0 && dt >= 0 && dt < 8000) {
-      freq.set(d, (freq.get(d) || 0) + 1);
-    }
+    if (d > 0 && d % SM2_SAMPLE === 0 && dt > 0 && dt < 5000) deltas.push(d);
   }
-  if (!freq.size) return [];
-  const expected = (nCh > 0 ? nCh : 1) * SM2_SAMPLE;
-  let strideGuess = expected;
-  let bestN = -1;
-  for (const [d, n] of freq) {
-    const bonus = d === expected ? n * 2 : n;
-    if (bonus > bestN) { strideGuess = d; bestN = bonus; }
+  if (!deltas.length) return [];
+  deltas.sort((a, b) => a - b);
+  let strideGuess = deltas[Math.floor(deltas.length / 2)];
+  if (strideGuess !== stride) {
+    // если угадали иначе — доверяем частому шагу
+    const freq = new Map();
+    for (const d of deltas) freq.set(d, (freq.get(d) || 0) + 1);
+    let best = strideGuess; let bestN = 0;
+    for (const [d, n] of freq) if (n > bestN) { best = d; bestN = n; }
+    strideGuess = best;
   }
   const chCount = strideGuess / SM2_SAMPLE;
-  if (!Number.isInteger(chCount) || chCount < 1 || chCount > 40) return [];
+  if (!Number.isInteger(chCount) || chCount < 1) return [];
 
-  const phaseFreq = new Map();
-  for (const a of anchors) {
-    const ph = ((a.off % strideGuess) + strideGuess) % strideGuess;
-    phaseFreq.set(ph, (phaseFreq.get(ph) || 0) + 1);
-  }
-  let phase = 0;
-  let phaseN = -1;
-  for (const [p, n] of phaseFreq) {
-    if (n > phaseN) { phase = p; phaseN = n; }
-  }
-  const aligned = anchors.filter((a) =>
-    (((a.off % strideGuess) + strideGuess) % strideGuess) === phase
-  );
-  if (aligned.length < 5) return [];
-
-  let rpmCh = namedRpm >= 0 && namedRpm < chCount ? namedRpm : 0;
-  // если имя RPM вне кадра (шаг меньше числа имён) — RPM в начале найденного якоря
-  if (namedRpm >= chCount) rpmCh = 0;
-
-  let pedalCh = loadNameIdx >= 0 && loadNameIdx < chCount && loadNameIdx !== rpmCh
-    ? loadNameIdx : -1;
-  let speedCh = namedSpeed >= 0 && namedSpeed < chCount && namedSpeed !== rpmCh && namedSpeed !== pedalCh
-    ? namedSpeed : -1;
+  const rpmNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_RPM_KEYS) >= 40);
+  const pedalNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_PEDAL_KEYS) >= 40);
+  const thrNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_THROTTLE_KEYS) >= 40);
+  let rpmCh = rpmNameIdx >= 0 && rpmNameIdx < chCount ? rpmNameIdx : 0;
+  let pedalCh = -1;
+  if (pedalNameIdx >= 0 && pedalNameIdx < chCount && pedalNameIdx !== rpmCh) pedalCh = pedalNameIdx;
+  else if (thrNameIdx >= 0 && thrNameIdx < chCount && thrNameIdx !== rpmCh) pedalCh = thrNameIdx;
 
   const rows = [];
   const seen = new Set();
-  let lastPedal = 0;
-  for (const a of aligned) {
+  let lastPedal = NaN;
+  for (const a of anchors) {
     const rec = a.off - rpmCh * SM2_SAMPLE;
-    if (rec < from - SM2_SAMPLE || rec + strideGuess > to + SM2_SAMPLE) continue;
-    if (rec < 0) continue;
-    const tKey = a.t;
-    if (seen.has(tKey)) continue;
-    seen.add(tKey);
-
+    if (rec < from || rec + strideGuess > to) continue;
+    if (seen.has(a.t)) continue;
+    seen.add(a.t);
     const chans = [];
-    for (let c = 0; c < chCount; c++) {
-      const off = rec + c * SM2_SAMPLE;
-      chans.push(off + 8 <= view.byteLength ? sm2ReadF64(view, off) : NaN);
-    }
-    const rpm = chans[rpmCh];
-    if (!sm2Ok(rpm) || rpm < 400 || rpm > 9000) continue;
+    for (let c = 0; c < chCount; c++) chans.push(sm2ReadF64(view, rec + c * SM2_SAMPLE));
+
+    const rpmVal = chans[rpmCh];
+    if (!sm2Ok(rpmVal) || rpmVal < 400 || rpmVal > 9000) continue;
 
     let pedal = NaN;
     if (pedalCh >= 0) {
-      pedal = sm2SanitizePct(chans[pedalCh], scaleLoad01);
-      if (!sm2Ok(pedal)) pedal = lastPedal;
-      else lastPedal = pedal;
+      let v = chans[pedalCh];
+      if (sm2Ok(v) && Math.abs(v) < 1e-8) v = 0;
+      if (sm2Ok(v) && v >= 0 && v <= 1.5) v *= 100;
+      if (sm2Ok(v) && v >= -0.5 && v <= 105) pedal = v;
+      else if (sm2Ok(lastPedal)) pedal = lastPedal;
+      lastPedal = pedal;
     }
 
+    const speedNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_SPEED_KEYS) >= 40);
     let speed = null;
-    if (speedCh >= 0) {
-      const sv = sm2SanitizeSpeed(chans[speedCh]);
-      if (sm2Ok(sv)) speed = sv;
+    if (speedNameIdx >= 0 && speedNameIdx < chCount && speedNameIdx !== rpmCh && speedNameIdx !== pedalCh) {
+      const sv = chans[speedNameIdx];
+      if (sm2Ok(sv) && sv >= 0 && sv <= 350) speed = sv;
+    } else {
+      for (let c = 0; c < chCount; c++) {
+        if (c === rpmCh || c === pedalCh) continue;
+        const sv = chans[c];
+        if (!sm2Ok(sv) || sv < 5 || sv > 280) continue;
+        // скорость обычно растёт вместе с оборотами, диапазон не как педаль
+        if (sv > 105 || (sv > 30 && sv < 200)) { speed = sv; break; }
+      }
     }
-
-    rows.push({ t: a.t / 1000, rpm, pedal, speed });
+    rows.push({ t: a.t / 1000, rpm: rpmVal, pedal, speed });
   }
   rows.sort((a, b) => a.t - b.t);
-  if (rows.length < 5) return rows;
-  const times = rows.map((r) => r.t).sort((a, b) => a - b);
-  const med = times[Math.floor(times.length / 2)];
-  const cleaned = rows.filter((r) => Math.abs(r.t - med) < 900);
-  return cleaned.length >= 5 ? cleaned : rows;
+  return rows;
 }
 
 function sm2LongestRising(rows, from, to) {
@@ -407,102 +354,159 @@ function sm2AllRisingSegments(rows, from, to) {
   return segs;
 }
 
-/** Учёт шага OBD (~0.1–0.15 с): 2.99 с проходит порог «3 с». */
-function sm2MeetsMinDur(dur, minDur) {
+/** Учёт редкого OBD: длительность + запас на 2–3 кадра. */
+function sm2MeetsMinDur(dur, minDur, medDt = 0.12) {
   if (!Number.isFinite(dur) || !Number.isFinite(minDur)) return false;
-  return dur + 0.12 >= minDur;
+  const slack = Math.max(0.2, 3 * (Number(medDt) || 0.12));
+  return dur + slack >= minDur;
 }
 
-/** Участок пересекается с выбранным окном оборотов (не обязан его целиком накрывать). */
+/** Участок пересекается с выбранным окном оборотов (не обязан целиком накрывать 2500→5000). */
 function sm2CoversRpmBand(rpm0, rpm1, lo = 1000, hi = 8000) {
   if (!Number.isFinite(rpm0) || !Number.isFinite(rpm1) || !(hi > lo)) return false;
   const a = Math.min(rpm0, rpm1);
   const b = Math.max(rpm0, rpm1);
-  return b >= lo && a <= hi && (Math.min(b, hi) - Math.max(a, lo) >= 80);
+  return Math.min(b, hi) - Math.max(a, lo) >= 150;
 }
 
-function sm2CropRisingByRpm(rows, a, b, lo, hi) {
-  if (!(hi > lo)) return null;
-  let i = a;
-  let j = b;
-  while (i <= j && !(rows[i].rpm >= lo && rows[i].rpm <= hi)) i++;
-  while (j >= i && !(rows[j].rpm >= lo && rows[j].rpm <= hi)) j--;
-  if (j - i < 3) return null;
-  return { a: i, b: j };
+function sm2SegMedDt(rows, a, b) {
+  const dts = [];
+  for (let i = a + 1; i <= b; i++) {
+    const dt = rows[i].t - rows[i - 1].t;
+    if (dt > 1e-6 && dt < 8) dts.push(dt);
+  }
+  if (!dts.length) return 0.12;
+  dts.sort((x, y) => x - y);
+  return dts[Math.floor(dts.length / 2)];
+}
+
+function sm2IsGap(rows, k, gapSec) {
+  if (k <= 0 || k >= rows.length) return false;
+  const dt = rows[k].t - rows[k - 1].t;
+  return Number.isFinite(dt) && dt > gapSec;
 }
 
 /**
- * Непрерывные разгоны в выбранном окне педали/дросселя и оборотов.
- * Если педали в логе нет — режем только по оборотам.
- * @returns {Array<{ rows, fullThr, maxPedal, dur, gain, score, hasPedal }>}
+ * Все непрерывные разгоны на одной передаче.
+ * Педаль/дроссель — мягкий фильтр: участок не обрезается до порога,
+ * достаточно, что в нём есть нагрузка в выбранном окне (или адаптивно, если в логе нет 70%).
+ * Без канала педали — рост оборотов с отсечкой медленных «проползаний».
+ * @returns {Array<{ a, b, rows, fullThr, maxPedal, dur, gain, score, hasPedal }>}
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 5) return [];
   const pedals = rows.map((r) => r.pedal).filter((v) => sm2Ok(v));
   const hasPedal = pedals.length > 0;
   const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
-  const pedalMin = opts.pedalMin ?? opts.fullFloor ?? (hasPedal ? 70 : 0);
+  const pedalMinReq = opts.pedalMin ?? opts.fullFloor ?? 70;
   const pedalMax = opts.pedalMax ?? 100;
-  const minDur = opts.minDuration ?? 2.5;
+  let pedalMin = pedalMinReq;
+  if (hasPedal && maxPedal < pedalMinReq && maxPedal >= 25) {
+    pedalMin = Math.max(20, Math.min(pedalMinReq, maxPedal * 0.75));
+  }
+  const releaseThr = hasPedal
+    ? Math.max(12, Math.min(pedalMin * 0.65, opts.releasePedal ?? pedalMin * 0.65))
+    : 0;
+  const minDur = opts.minDuration ?? 3;
   const minRpmGain = opts.minRpmGain ?? 200;
   const rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 1000;
   const rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 8000;
-  const releaseThr = hasPedal
-    ? Math.min(pedalMin * 0.7, opts.releasePedal ?? pedalMin * 0.7)
-    : 0;
+  const gapSec = opts.gapSec ?? 2.5;
+  const maxDur = opts.maxDuration ?? 22;
+  const minRps = opts.minRps ?? (hasPedal ? 45 : 80);
 
-  const inPedal = (v) => {
+  const inLoad = (v) => {
     if (!hasPedal) return true;
-    return sm2Ok(v) && v >= pedalMin && v <= pedalMax + 0.5;
+    return sm2Ok(v) && v >= pedalMin && v <= pedalMax + 1;
   };
-  const stayPedal = (v) => {
+  const stayLoad = (v) => {
     if (!hasPedal) return true;
     return sm2Ok(v) && v >= releaseThr && v <= Math.min(105, pedalMax + 8);
   };
 
   const candidates = [];
-  const pushSeg = (a0, b0) => {
+  const consider = (a0, b0) => {
     if (b0 - a0 < 3) return;
     for (const rising of sm2AllRisingSegments(rows, a0, b0)) {
-      const durFull = rows[rising.b].t - rows[rising.a].t;
-      const gainFull = rows[rising.b].rpm - rows[rising.a].rpm;
-      if (!sm2MeetsMinDur(durFull, minDur)) continue;
-      if (!(gainFull >= minRpmGain)) continue;
-      const cropped = sm2CropRisingByRpm(rows, rising.a, rising.b, rpmMin, rpmMax);
-      if (!cropped) continue;
-      const dur = rows[cropped.b].t - rows[cropped.a].t;
-      const rpm0 = rows[cropped.a].rpm;
-      const rpm1 = rows[cropped.b].rpm;
+      if (hasPedal) {
+        let hasIn = false;
+        for (let i = rising.a; i <= rising.b; i++) {
+          if (inLoad(rows[i].pedal)) { hasIn = true; break; }
+        }
+        if (!hasIn) continue;
+      }
+      const dur = rows[rising.b].t - rows[rising.a].t;
+      const rpm0 = rows[rising.a].rpm;
+      const rpm1 = rows[rising.b].rpm;
       const gain = rpm1 - rpm0;
-      if (gain < 80) continue;
+      const medDt = sm2SegMedDt(rows, rising.a, rising.b);
+      const rps = dur > 1e-6 ? gain / dur : 0;
+      const strong = gain >= 800 && rps >= 250 && dur >= 1.0;
+      const needGain = hasPedal ? minRpmGain : Math.max(minRpmGain, 600);
+      if (!sm2MeetsMinDur(dur, minDur, medDt) && !strong) continue;
+      if (dur > maxDur && !strong) continue;
+      if (!(gain >= needGain)) continue;
+      if (rps < minRps && !strong) continue;
+      if (!hasPedal && rpm1 < 3000) continue;
+      if (!sm2CoversRpmBand(rpm0, rpm1, rpmMin, rpmMax)) continue;
       candidates.push({
-        a: cropped.a,
-        b: cropped.b,
+        a: rising.a,
+        b: rising.b,
         dur,
         gain,
-        score: durFull * Math.sqrt(Math.max(gainFull, 1)),
+        score: Math.min(dur, 12) * Math.sqrt(Math.max(gain, 1)) + rps,
       });
     }
   };
 
-  let i = 0;
-  while (i < rows.length) {
-    while (i < rows.length && !inPedal(rows[i].pedal)) i++;
-    if (i >= rows.length) break;
-    const start = i;
-    while (i < rows.length && stayPedal(rows[i].pedal)) i++;
-    const end = i - 1;
-    if (end - start < 3) continue;
-
-    let segStart = start;
-    for (let k = start + 1; k <= end; k++) {
-      const drop = rows[k - 1].rpm - rows[k].rpm;
-      const isBreak = drop > 250 || k === end;
-      if (!isBreak) continue;
-      const segEnd = drop > 250 ? k - 1 : end;
-      pushSeg(segStart, segEnd);
+  const splitGearAndGaps = (from, to) => {
+    let segStart = from;
+    for (let k = from + 1; k <= to + 1; k++) {
+      const atEnd = k > to;
+      const drop = !atEnd && rows[k - 1].rpm - rows[k].rpm > 250;
+      const gap = !atEnd && sm2IsGap(rows, k, gapSec);
+      if (!drop && !gap && !atEnd) continue;
+      consider(segStart, drop || gap ? k - 1 : to);
       segStart = k;
     }
+  };
+
+  if (!hasPedal) {
+    splitGearAndGaps(0, rows.length - 1);
+  } else {
+    let i = 0;
+    while (i < rows.length) {
+      while (i < rows.length && !stayLoad(rows[i].pedal)) i++;
+      if (i >= rows.length) break;
+      const start = i;
+      i++;
+      while (i < rows.length && stayLoad(rows[i].pedal) && !sm2IsGap(rows, i, gapSec)) i++;
+      const end = i - 1;
+      if (end - start < 3) continue;
+      let hasIn = false;
+      for (let k = start; k <= end; k++) {
+        if (inLoad(rows[k].pedal)) { hasIn = true; break; }
+      }
+      if (!hasIn) continue;
+      splitGearAndGaps(start, end);
+    }
+  }
+
+  if (!candidates.length && hasPedal) {
+    const sorted = [...pedals].sort((a, b) => a - b);
+    const hi = sorted[Math.floor(sorted.length * 0.75)];
+    const thr2 = Math.min(pedalMin, Math.max(hi * 0.85, maxPedal * 0.7));
+    let a = 0;
+    for (let k = 1; k < rows.length; k++) {
+      const released = rows[k].pedal < thr2;
+      const drop = rows[k].rpm + 200 < rows[k - 1].rpm;
+      const gap = sm2IsGap(rows, k, gapSec);
+      if (released || drop || gap) {
+        consider(a, k - 1);
+        a = k;
+      }
+    }
+    consider(a, rows.length - 1);
   }
 
   candidates.sort((x, y) => y.score - x.score);
@@ -567,24 +571,23 @@ function parseSm2ArrayBuffer(buffer) {
 
     // Данные сразу после UTF-16 имён (+ короткий заголовок блока)
     const metaStart = names.length ? names[names.length - 1].end : from + 0x100;
-    const compact = sm2ExtractCompact2ch(view, metaStart, to);
-    const compact2 = compact.length >= 5 ? compact : sm2ExtractCompact2ch(view, from + 0x100, to);
-    const multi = sm2ExtractMultiCh(view, metaStart, to, Math.max(nCh, 2), names);
     let samples = [];
     if (nCh <= 2) {
-      samples = compact2.length >= 5 ? compact2 : multi;
+      samples = sm2ExtractCompact2ch(view, metaStart, to);
+      if (samples.length < 5) samples = sm2ExtractCompact2ch(view, from + 0x100, to);
+      if (samples.length < 5) samples = sm2ExtractMultiCh(view, metaStart, to, Math.max(nCh, 2), names);
     } else {
-      samples = multi.length >= 5 ? multi : compact2;
+      samples = sm2ExtractMultiCh(view, metaStart, to, nCh, names);
+      if (samples.length < 5) samples = sm2ExtractCompact2ch(view, metaStart, to);
     }
+
     if (samples.length < 5) continue;
 
     const rpmName = names.find((n) => sm2NameScore(n.name, SM2_RPM_KEYS) >= 40)?.name || "Обороты двигателя";
-    const pedalNamed =
+    const pedalName =
       names.find((n) => sm2NameScore(n.name, SM2_PEDAL_KEYS) >= 40)?.name ||
       names.find((n) => sm2NameScore(n.name, SM2_THROTTLE_KEYS) >= 40)?.name ||
-      null;
-    const hasPedal = samples.some((r) => sm2Ok(r.pedal));
-    const pedalName = hasPedal ? (pedalNamed || "Педаль/дроссель") : "Педаль/дроссель";
+      "Педаль/дроссель";
 
     const speedName = names.find((n) => sm2NameScore(n.name, SM2_SPEED_KEYS) >= 40)?.name || null;
     const hasSpeed = samples.some((r) => Number.isFinite(r.speed));
@@ -594,7 +597,6 @@ function parseSm2ArrayBuffer(buffer) {
     const rows = samples.map((r) => (hasSpeed
       ? [r.t, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
       : [r.t, r.rpm, r.pedal]));
-    const finitePedal = samples.map((r) => r.pedal).filter((v) => sm2Ok(v));
     const duration = rows.length ? rows[rows.length - 1][0] - rows[0][0] : 0;
 
     sessions.push({
@@ -611,12 +613,6 @@ function parseSm2ArrayBuffer(buffer) {
         filetime: tocEntry?.filetime ?? null,
         duration,
         hasSpeed,
-        hasPedal,
-        pedalName,
-        rpmName,
-        sourceHint: nCh <= 2 ? "compact-2ch" : "multi-ch",
-        pedalMin: finitePedal.length ? Math.min(...finitePedal) : null,
-        pedalMax: finitePedal.length ? Math.max(...finitePedal) : null,
       },
     });
   }

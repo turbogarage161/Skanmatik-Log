@@ -2,40 +2,29 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#12151a" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-title" content="SM2 разгон" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Анализатор разгонов — Scanmatic SM2</title>
-  <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=12"></script>
+  <script src="sm2.js?v=14"></script>
 </head>
 <body>
   <div class="app">
     <header class="header">
       <div>
         <h1>Анализатор разгонов SM2</h1>
-        <p class="subtitle">ПК и Android · .sm2 → фильтр оборотов/педали → полка / Virtual Dyno → сравнение</p>
+        <p class="subtitle">Scanmatic .sm2 → WOT → полка / Virtual Dyno (P/m=a·v) → сравнение по оборотам</p>
       </div>
-      <div class="header-actions">
-        <button type="button" class="btn" id="installBtn" hidden>На экран Android</button>
-        <label class="btn primary file-btn">
-          Загрузить .sm2
-          <input type="file" id="fileInput" accept=".sm2,application/octet-stream" multiple hidden />
-        </label>
-      </div>
+      <label class="btn primary file-btn">
+        Загрузить .sm2
+        <input type="file" id="fileInput" accept=".sm2,application/octet-stream" multiple hidden />
+      </label>
     </header>
 
     <section class="layout">
       <aside class="panel pulls">
         <h2>Найденные разгоны</h2>
-        <div id="pullList" class="pull-list empty">Загрузите один или несколько логов .sm2 (ПК или телефон).</div>
+        <div id="pullList" class="pull-list empty">Загрузите один или несколько логов .sm2 (OBD-II).</div>
         <div class="actions sticky">
           <button type="button" class="btn" id="exportBtn" disabled>Экспорт выбранного CSV</button>
           <button type="button" class="btn" id="pngBtn" disabled>Сохранить график PNG</button>
@@ -67,7 +56,7 @@
           <div class="delta-bar" id="deltaBar">
             <div class="delta-slider-row">
               <label for="deltaRpm">Обороты для Δ%</label>
-              <input type="range" id="deltaRpm" min="1000" max="8000" step="250" value="3500" />
+              <input type="range" id="deltaRpm" min="2000" max="7500" step="250" value="3500" />
               <strong id="deltaRpmLabel">3500</strong>
               <span class="muted">об/мин</span>
             </div>
@@ -116,17 +105,17 @@
           </div>
         </div>
       </div>
-      <div class="grid grid-compact">
+      <div class="grid">
         <label>
-          Мин. длительность, с
-          <input type="number" id="minDuration" value="2.5" min="0.5" max="30" step="0.1" />
+          Мин. длительность разгона, с
+          <input type="number" id="minDuration" value="3" min="0.5" max="30" step="0.1" />
         </label>
         <label>
-          Сглаживание (окно) · dRPM/dt
+          Сглаживание (окно) — вкладка «Ускорение · dRPM/dt»
           <input type="number" id="smoothWindow" value="5" min="1" max="31" step="2" />
         </label>
         <label>
-          Окно dt Link, с
+          Окно dt Link, с — вкладка «Момент · полка Link»
           <input type="number" id="dtWindow" value="0.2" min="0.05" max="1" step="0.05" />
         </label>
         <label>
@@ -141,7 +130,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Ползунки с двух сторон: обороты 1000–8000 и педаль/дроссель как в логе. Логи Сканматика с ПК и Android.</p>
+      <p class="hint" id="columnHint">Ползунки: обороты 1000–8000 и педаль/дроссель. Собираются все участки разгона из лога и сравниваются по оборотам.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -150,6 +139,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=33"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>
