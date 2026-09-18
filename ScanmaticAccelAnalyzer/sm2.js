@@ -9,6 +9,12 @@
  *
  * N>2 каналов:
  *   на канал: float64 value | int64 time_ms | int64 reserved         (24×N)
+ *
+ * Раскладки Сканматика (OBD-II Livedata), на которых учится детектор:
+ *   2ch ПК:  обороты + абсолютное положение дросселя (WOT Ford ≈ 86% = 219/255)
+ *   3ch:     обороты + скорость + дроссель
+ *   4ch:     MAP + обороты + УОЗ + лямбда (педали нет — только рост оборотов)
+ *   5ch:     обороты + скорость + УОЗ + дроссель + лямбда
  */
 
 const SM2_SAMPLE = 24;
@@ -66,6 +72,14 @@ const SM2_PEDAL_KEYS = [
 const SM2_THROTTLE_KEYS = [
   "дроссел", "throttle", "абсолютное положение дросселя", "положение дросселя", "tps",
   "throttle position", "absolute throttle",
+];
+/** Запасной канал «в пол», если педали/дросселя нет. MAP/разрежение — не педаль. */
+const SM2_LOAD_KEYS = [
+  "расчетная нагрузка", "расчётная нагрузка", "calculated load", "engine load",
+  "нагрузка двигателя", "absolute load",
+];
+const SM2_MAP_KEYS = [
+  "разрежение", "впускном коллекторе", "manifold", "map sensor", "давление во впуск",
 ];
 const SM2_SPEED_KEYS = [
   "скорость автомобиля", "скорость тс", "vehicle speed", "vss", "скорость", "speed", "км/ч", "km/h",
@@ -274,10 +288,18 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
   const rpmNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_RPM_KEYS) >= 40);
   const pedalNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_PEDAL_KEYS) >= 40);
   const thrNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_THROTTLE_KEYS) >= 40);
+  const loadNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_LOAD_KEYS) >= 40);
+  const mapNameIdx = names.findIndex((n) => sm2NameScore(n.name, SM2_MAP_KEYS) >= 40);
   let rpmCh = rpmNameIdx >= 0 && rpmNameIdx < chCount ? rpmNameIdx : 0;
+  if (mapNameIdx >= 0 && rpmCh === mapNameIdx) {
+    rpmCh = rpmNameIdx >= 0 ? rpmNameIdx : 1;
+  }
   let pedalCh = -1;
   if (pedalNameIdx >= 0 && pedalNameIdx < chCount && pedalNameIdx !== rpmCh) pedalCh = pedalNameIdx;
   else if (thrNameIdx >= 0 && thrNameIdx < chCount && thrNameIdx !== rpmCh) pedalCh = thrNameIdx;
+  else if (loadNameIdx >= 0 && loadNameIdx < chCount && loadNameIdx !== rpmCh && loadNameIdx !== mapNameIdx) {
+    pedalCh = loadNameIdx;
+  }
 
   const rows = [];
   const seen = new Set();
@@ -311,6 +333,7 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     } else {
       for (let c = 0; c < chCount; c++) {
         if (c === rpmCh || c === pedalCh) continue;
+        if (c === mapNameIdx || c === loadNameIdx) continue;
         const sv = chans[c];
         if (!sm2Ok(sv) || sv < 5 || sv > 280) continue;
         // скорость обычно растёт вместе с оборотами, диапазон не как педаль
@@ -320,7 +343,24 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     rows.push({ t: a.t / 1000, rpm: rpmVal, pedal, speed });
   }
   rows.sort((a, b) => a.t - b.t);
+  sm2DropFrozenSpeed(rows);
   return rows;
+}
+
+/** Сканматик иногда пишет «скорость» как застывшее 219/255·100, пока растут обороты. */
+function sm2DropFrozenSpeed(rows) {
+  if (!rows || rows.length < 8) return;
+  const withSp = rows.filter((r) => Number.isFinite(r.speed) && r.speed > 0);
+  if (withSp.length < 6) return;
+  const rpmSpan = Math.max(...rows.map((r) => r.rpm)) - Math.min(...rows.map((r) => r.rpm));
+  if (rpmSpan < 1200) return;
+  const speeds = withSp.map((r) => r.speed);
+  const spSpan = Math.max(...speeds) - Math.min(...speeds);
+  const mid = speeds.slice().sort((a, b) => a - b)[Math.floor(speeds.length / 2)];
+  const frozen = speeds.filter((s) => Math.abs(s - mid) < 1.5).length / speeds.length;
+  if ((spSpan < 10 && frozen > 0.6) || frozen > 0.75) {
+    for (const r of rows) r.speed = null;
+  }
 }
 
 function sm2LongestRising(rows, from, to) {
@@ -431,12 +471,19 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const consider = (a0, b0) => {
     if (b0 - a0 < 3) return;
     for (const rising of sm2AllRisingSegments(rows, a0, b0)) {
+      const climbPeds = [];
+      let inN = 0;
+      for (let i = rising.a; i <= rising.b; i++) {
+        const v = rows[i].pedal;
+        if (sm2Ok(v)) climbPeds.push(v);
+        if (inLoad(v)) inN++;
+      }
       if (hasPedal) {
-        let hasIn = false;
-        for (let i = rising.a; i <= rising.b; i++) {
-          if (inLoad(rows[i].pedal)) { hasIn = true; break; }
-        }
-        if (!hasIn) continue;
+        if (inN < 2) continue;
+        climbPeds.sort((x, y) => x - y);
+        const pmed = climbPeds[Math.floor(climbPeds.length / 2)];
+        // всплеск 100% на 1–2 кадрах при медианных ~0% — не «педаль в пол»
+        if (Number.isFinite(pmed) && pmed < Math.min(pedalMin * 0.45, 32) && inN < 4) continue;
       }
       const dur = rows[rising.b].t - rows[rising.a].t;
       const rpm0 = rows[rising.a].rpm;

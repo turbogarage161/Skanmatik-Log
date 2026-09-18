@@ -157,6 +157,12 @@ function parseCsvText(text) {
   return { headers, rows, delim };
 }
 
+function looksLikeScanmatikCsv(headers) {
+  const rpm = headers.some((h) => scoreHeader(h, RPM_KEYS) >= 40);
+  const pedal = headers.some((h) => scoreHeader(h, [...PEDAL_KEYS, ...THROTTLE_KEYS]) >= 40);
+  return rpm && pedal;
+}
+
 function pickColumns(headers) {
   const scored = (keys) => headers
     .map((h, i) => ({ i, s: scoreHeader(h, keys), h }))
@@ -733,12 +739,16 @@ async function addFiles(fileList) {
         continue;
       }
 
-      // CSV fallback
+      // CSV Сканматика (экспорт Livedata). Другие логгеры не разбираем.
+      if (!/\.csv$/i.test(file.name)) {
+        alert(`«${file.name}» — нужен лог Scanmatik .sm2 (или CSV Сканматика).`);
+        continue;
+      }
       const text = await decodeFile(file);
       const parsed = parseCsvText(text);
       const cols = pickColumns(parsed.headers);
-      if (cols.rpmCol < 0 || cols.pedalCol < 0) {
-        alert(`Не нашёл обороты/педаль в «${file.name}». Нужен .sm2 OBD-II.`);
+      if (!looksLikeScanmatikCsv(parsed.headers) || cols.rpmCol < 0 || cols.pedalCol < 0) {
+        alert(`«${file.name}» не похож на CSV Сканматика (нужны обороты и педаль/дроссель).`);
         continue;
       }
       if (cols.timeCol < 0) cols.timeCol = 0;

@@ -12,3 +12,5 @@
 Откройте `ScanmaticAccelAnalyzer/index.html` в Chrome / Edge.
 
 Ползунки: обороты **1000–8000** (окно, сквозь которое должен пройти разгон; на графике весь набор) и педаль/дроссель.
+
+Примеры логов Сканматика — в `ScanmaticAccelAnalyzer/sample/` (`.sm2` и CSV).
