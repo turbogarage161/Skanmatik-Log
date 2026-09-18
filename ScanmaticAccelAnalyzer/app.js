@@ -855,10 +855,17 @@ function sm2WotOpts(opts) {
 function sessionAsViewPull(session) {
   const samples = session.samples || [];
   if (samples.length < 5) return null;
-  const t0 = samples[0].t;
+  let use = samples;
+  if (typeof sm2LongestRising === "function") {
+    const rise = sm2LongestRising(samples, 0, samples.length - 1);
+    if (rise && samples[rise.b].rpm - samples[rise.a].rpm >= 80) {
+      use = samples.slice(rise.a, rise.b + 1);
+    }
+  }
+  const t0 = use[0].t;
   const keepSpeed = session.headers.length >= 4
     || session.meta?.hasSpeed
-    || samples.some((r) => Number.isFinite(r.speed));
+    || use.some((r) => Number.isFinite(r.speed));
   const headers = keepSpeed && session.headers.length >= 4
     ? session.headers
     : keepSpeed
@@ -866,10 +873,10 @@ function sessionAsViewPull(session) {
       : session.headers;
   return {
     headers,
-    rows: samples.map((r) => (keepSpeed
+    rows: use.map((r) => (keepSpeed
       ? [r.t - t0, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
       : [r.t - t0, r.rpm, r.pedal])),
-    absRows: samples.map((r) => (keepSpeed
+    absRows: use.map((r) => (keepSpeed
       ? [r.t, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
       : [r.t, r.rpm, r.pedal])),
     label: session.label,
@@ -1223,7 +1230,7 @@ function metricValue(p, metric, mode = "classic") {
   return mode === "link" ? p.rpmAccelLink : p.rpmAccel;
 }
 
-/** Ось оборотов (X): как ползунки начала–конца, шаг 250. */
+/** Ось оборотов (X): ползунки; если окно мимо данных — расширяем, чтобы график не был пустым. */
 function rpmAxisRange() {
   const o = optsFromUi();
   let min = Number.isFinite(o.rpmMin) ? o.rpmMin : 1000;
@@ -1233,6 +1240,20 @@ function rpmAxisRange() {
     min = max;
     max = t;
   }
+  const selected = (typeof selectedPulls === "function") ? selectedPulls() : [];
+  if (selected.length) {
+    const rpms = selected.flatMap((p) => [p.rpm0, p.rpm1]).filter(Number.isFinite);
+    if (rpms.length) {
+      const lo = Math.min(...rpms);
+      const hi = Math.max(...rpms);
+      const overlap = Math.min(hi, max) - Math.max(lo, min);
+      if (!(overlap > 80)) {
+        min = Math.min(min, Math.floor(lo / 250) * 250);
+        max = Math.max(max, Math.ceil(hi / 250) * 250);
+      }
+    }
+  }
+  if (max - min < 250) max = min + 250;
   return { min, max };
 }
 
