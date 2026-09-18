@@ -806,11 +806,25 @@ function sm2BurstPedalMax(rows, from, to) {
 const SM2_WOT_NOISE = 2;
 
 /**
- * Педаль/дроссель — жёсткий допуск по ползунку.
- * Порог не опускается сам: если в логе максимум ниже ползунка, участок отсеивается.
+ * Педаль/дроссель — жёсткий допуск по ползунку на ПК.
+ * На редком телефонном OBD порог рампы считает sm2EffectiveWotFloor.
  */
 function sm2EffectivePedalMin(sessionMax, pedalMinReq) {
   return pedalMinReq;
+}
+
+/** ПК ~0.13 с; телефон ~0.26 с и пачки ~14 кадров. */
+function sm2IsSparseObd(rows) {
+  if (!rows || rows.length < 4) return false;
+  const med = sm2SegMedDt(rows, 0, rows.length - 1);
+  if (med >= 0.20) return true;
+  const bursts = sm2TimeBursts(rows, SM2_GAP_SEC);
+  if (bursts.length >= 4) {
+    const lens = bursts.map((b) => b.b - b.a + 1).sort((a, b) => a - b);
+    const mid = lens[Math.floor(lens.length / 2)];
+    if (mid <= 24) return true;
+  }
+  return false;
 }
 
 function sm2PedalAdmitsPull(ped, { pedalMinReq, pedalMax }) {
@@ -831,7 +845,7 @@ function sm2NoPedalAdmitsPull(rows, a, b, { gain, rps, n, rpm0, rpm1 }) {
   return true;
 }
 
-/** Телефон: PID дросселя часто не доходит до ползунка WOT (макс ~50–58%). */
+/** Телефон: PID дросселя часто не доходит до ползунка WOT (макс ~50–58%). Только sparse-путь. */
 function sm2EffectiveWotFloor(wotFloor, sessionMax) {
   const floor = Number(wotFloor);
   if (!Number.isFinite(floor)) return 70;
@@ -986,7 +1000,8 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const hasPedal = pedals.length > 0;
   const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
   const wotFloor = opts.wotFloor ?? opts.pedalMin ?? opts.fullFloor ?? 70;
-  const rampFloor = sm2EffectiveWotFloor(wotFloor, maxPedal);
+  const sparse = sm2IsSparseObd(rows);
+  const rampFloor = sparse ? sm2EffectiveWotFloor(wotFloor, maxPedal) : wotFloor;
   const minDur = opts.minDuration ?? 3;
   let rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 2000;
   let rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 6000;
@@ -1062,7 +1077,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
       if (hasPedal) {
         const holds = sm2StationaryWotRuns(rows, g.a, g.b, wotFloor);
         for (const hold of holds) considerRange(hold.a, hold.b, "hold");
-        considerRange(g.a, g.b, "ramp");
+        if (sparse) considerRange(g.a, g.b, "ramp");
       } else {
         considerRange(g.a, g.b, "rise");
       }
