@@ -921,12 +921,20 @@ function sm2PedalNearHold(p, level, noise = SM2_WOT_NOISE) {
   return sm2Ok(p) && Math.abs(p - level) <= noise + 1e-6;
 }
 
-/** На всём участке: педаль ≥ WOT и статична. |p − полка| ≤ 2% — шум, не движение. */
+/** Стационарный максимум педали/дросселя (верхние 15%), не среднее с рампой. */
+function sm2HoldLevel(rows, a, b) {
+  const ped = sm2SegPedalStats(rows, a, b);
+  if (!ped) return NaN;
+  const sorted = ped.vals.slice().sort((x, y) => x - y);
+  const i = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.85)));
+  return sorted[i];
+}
+
+/** На всём участке: педаль ≥ WOT и статична у максимума. |p − полка| ≤ 2% — шум. */
 function sm2WotStaticThroughout(rows, a, b, wotFloor, noise = SM2_WOT_NOISE) {
   if (b - a < 2) return false;
-  const ped = sm2SegPedalStats(rows, a, b);
-  if (!ped) return false;
-  const level = ped.mean;
+  const level = sm2HoldLevel(rows, a, b);
+  if (!sm2Ok(level) || level < wotFloor - 0.25) return false;
   for (let i = a; i <= b; i++) {
     const p = rows[i].pedal;
     if (!sm2Ok(p) || p < wotFloor - 0.25) return false;
@@ -935,27 +943,29 @@ function sm2WotStaticThroughout(rows, a, b, wotFloor, noise = SM2_WOT_NOISE) {
   return true;
 }
 
-/** Свести кусок к полке, где педаль уже не едет к WOT и ещё не отпущена. */
-function sm2SettleToHoldLevel(rows, a, b) {
-  const ped = sm2SegPedalStats(rows, a, b);
-  if (!ped || b - a < 2) return { a, b };
-  const level = ped.mean;
+/**
+ * Показ: тот же набор, где педаль уже в зоне WOT и обороты растут.
+ * Берём кадр нажатия (Ford 82→86%), не круиз 20–30% и не окно ползунков.
+ */
+function sm2ExpandPressedRise(rows, a, b, wotFloor) {
+  if (!rows || b <= a) return { a, b };
+  const high = Math.max(wotFloor - 8, wotFloor * 0.85);
   let s = a;
-  let e = b;
-  while (s < e - 2) {
-    if (sm2PedalNearHold(rows[s].pedal, level)) break;
-    s++;
+  while (s > 0) {
+    if (sm2IsGap(rows, s, SM2_GAP_SEC) || sm2IsGearChange(rows, s)) break;
+    const p = rows[s - 1].pedal;
+    if (!sm2Ok(p) || p < high) break;
+    // назад только по тому же набору: обороты слева не выше (иначе это предыдущая передача)
+    if (rows[s - 1].rpm > rows[s].rpm + SM2_OBD_DIP) break;
+    s--;
   }
-  while (e > s + 2) {
-    if (sm2PedalNearHold(rows[e].pedal, level)) break;
-    e--;
-  }
-  return { a: s, b: e };
+  const trim = sm2TrimClimb(rows, s, b);
+  return trim.b - trim.a >= 2 ? trim : { a, b };
 }
 
 /**
- * Непрерывные участки, где педаль/дроссель ≥ порога WOT.
- * Полка = среднее положение; |p − полка| ≤ 2% — шум, не смена положения.
+ * Непрерывные участки, где педаль/дроссель удерживается на стационарном максимуме.
+ * Полка = верхние 15% (не среднее рампы 50→86): иначе порог 50% убивал полку 86%.
  */
 function sm2StationaryWotRuns(rows, from, to, wotFloor, noise = SM2_WOT_NOISE) {
   const high = sm2CollectRuns(rows, from, to, (i) => {
@@ -966,16 +976,15 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, noise = SM2_WOT_NOISE) {
   for (const run0 of high) {
     const parts = sm2SplitByGearAndGap(rows, run0.a, run0.b, SM2_GAP_SEC);
     for (const g of parts) {
-      const ped = sm2SegPedalStats(rows, g.a, g.b);
-      if (!ped) continue;
-      const level = ped.mean;
+      const level = sm2HoldLevel(rows, g.a, g.b);
+      if (!sm2Ok(level) || level < wotFloor - 0.25) continue;
       const core = sm2CollectRuns(rows, g.a, g.b, (i) => {
         const p = rows[i].pedal;
         return sm2Ok(p) && p >= wotFloor - 0.25 && sm2PedalNearHold(p, level, noise);
       });
       if (!core.length) continue;
       core.sort((x, y) => (y.b - y.a) - (x.b - x.a) || x.a - y.a);
-      const settled = sm2SettleToHoldLevel(rows, core[0].a, core[0].b);
+      const settled = core[0];
       if (settled.b - settled.a < 2) continue;
       if (!sm2WotStaticThroughout(rows, settled.a, settled.b, wotFloor, noise)) continue;
       out.push(settled);
@@ -986,24 +995,25 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, noise = SM2_WOT_NOISE) {
 
 /**
  * Разгоны:
- *  • ПК: полка WOT (±2%) в окне оборотов — как раньше.
+ *  • ПК: полка WOT (±2% от максимума) — окно оборотов только отбирает.
  *  • Телефон/Android: пачка кадров, дроссель часто едет рампой и не доходит до 70%.
- * Окно оборотов только отбирает; на график — весь непрерывный набор.
+ * На график — весь непрерывный набор (нажатие + рост оборотов), не ширина ползунков.
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 4) return [];
   const pedals = rows.map((r) => r.pedal).filter((v) => sm2Ok(v));
-  const hasPedal = pedals.length > 0;
-  const maxPedal = hasPedal ? Math.max(...pedals) : NaN;
+  const hasPedal = !opts.forceRise && pedals.length > 0;
+  const maxPedal = pedals.length ? Math.max(...pedals) : NaN;
   const wotFloor = opts.wotFloor ?? opts.pedalMin ?? opts.fullFloor ?? 70;
   const sparse = sm2IsSparseObd(rows);
   const rampFloor = sparse ? sm2EffectiveWotFloor(wotFloor, maxPedal) : wotFloor;
   const minDur = opts.minDuration ?? 3;
-  let rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 2000;
-  let rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 6000;
+  let rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 1000;
+  let rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 8000;
   if (!(rpmMax > rpmMin)) {
     const t = rpmMin; rpmMin = rpmMax; rpmMax = t;
   }
+  const ignoreRpmWindow = !!opts.ignoreRpmWindow;
   const gapSec = opts.gapSec ?? SM2_GAP_SEC;
   const maxDur = opts.maxDuration ?? 22;
   const minRps = opts.minRps ?? 20;
@@ -1029,16 +1039,12 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= 800 && n0 >= 8 && dur0 >= 1.2) && !sparseOk) {
       return;
     }
-    if (!sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) return;
-    const win = sm2RpmWindowSlice(rows, a, b, rpmMin, rpmMax);
-    const gate = (win && win.b - win.a >= 2) ? win : { a, b };
+    if (!ignoreRpmWindow && !sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) return;
     if (hasPedal) {
       if (kind === "hold") {
-        if (!sm2WotStaticThroughout(rows, gate.a, gate.b, wotFloor)) return;
-        if (!sm2WotStaticThroughout(rows, a, b, wotFloor)) return;
-      } else {
-        if (!sm2RampPedalOk(rows, gate.a, gate.b, rampFloor)) return;
-        if (!sm2RampPedalOk(rows, a, b, rampFloor)) return;
+        // полка уже из sm2StationaryWotRuns; окно только пересечение, не повторная проверка рампы
+      } else if (!sm2RampPedalOk(rows, a, b, rampFloor)) {
+        return;
       }
     } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1 })) {
       return;
@@ -1092,7 +1098,12 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   kept.sort((a, b) => a.a - b.a);
 
   return kept.map((c) => {
-    const slice = rows.slice(c.a, c.b + 1).map((r) => ({ ...r }));
+    const disp = hasPedal && c.kind === "hold"
+      ? sm2ExpandPressedRise(rows, c.a, c.b, wotFloor)
+      : { a: c.a, b: c.b };
+    const a = disp.a;
+    const b = disp.b;
+    const slice = rows.slice(a, b + 1).map((r) => ({ ...r }));
     if (slice.length >= 2) {
       const last = slice[slice.length - 1];
       const prev = slice[slice.length - 2];
@@ -1101,19 +1112,59 @@ function sm2FindAllWotPulls(rows, opts = {}) {
       }
     }
     sm2NullFakeSpeedOnClimb(slice);
+    const rpm0 = rows[a].rpm;
+    const rpm1 = rows[b].rpm;
     return {
-      a: c.a,
-      b: c.b,
+      a,
+      b,
       rows: slice,
       fullThr: c.kind === "hold" ? wotFloor : rampFloor,
       maxPedal,
-      dur: c.dur,
-      gain: c.gain,
+      dur: rows[b].t - rows[a].t,
+      gain: rpm1 - rpm0,
       score: c.score,
       hasPedal,
       kind: c.kind,
     };
   });
+}
+
+/**
+ * Для экрана: если строгий фильтр пуст, всё равно показать разгоны лога.
+ * Иначе загрузка выглядит как «ничего не видно».
+ */
+function sm2FindPullsForView(rows, opts = {}) {
+  const primary = sm2FindAllWotPulls(rows, opts);
+  if (primary.length) return primary;
+  const noWin = sm2FindAllWotPulls(rows, { ...opts, ignoreRpmWindow: true });
+  if (noWin.length) return noWin.map((p) => ({ ...p, windowMiss: true }));
+  const pedals = (rows || []).map((r) => r.pedal).filter((v) => sm2Ok(v));
+  const maxP = pedals.length ? Math.max(...pedals) : NaN;
+  const req = opts.wotFloor ?? opts.pedalMin ?? 70;
+  if (sm2Ok(maxP) && maxP >= 28 && req > maxP + 0.4) {
+    const floor = Math.max(28, maxP - 0.5);
+    const adapted = sm2FindAllWotPulls(rows, {
+      ...opts,
+      wotFloor: floor,
+      pedalMin: floor,
+      ignoreRpmWindow: true,
+    });
+    if (adapted.length) {
+      return adapted.map((p) => ({ ...p, wotAdapted: true, fullThr: floor, maxPedal: maxP }));
+    }
+  }
+  const rises = sm2FindAllWotPulls(rows, {
+    ...opts,
+    forceRise: true,
+    ignoreRpmWindow: true,
+    minDuration: Math.min(opts.minDuration ?? 3, 1.5),
+  });
+  if (rises.length) {
+    const top = rises.slice().sort((a, b) => b.score - a.score).slice(0, 3);
+    top.sort((a, b) => a.a - b.a);
+    return top.map((p) => ({ ...p, fallback: true }));
+  }
+  return [];
 }
 
 /** Совместимость: один лучший WOT. */
@@ -1225,7 +1276,7 @@ function sm2SessionToWotPulls(session, opts) {
   const samples = session.samples || session.rows.map((r) => ({
     t: r[0], rpm: r[1], pedal: r[2], speed: r[3],
   }));
-  const pulls = sm2FindAllWotPulls(samples, opts);
+  const pulls = (typeof sm2FindPullsForView === "function" ? sm2FindPullsForView : sm2FindAllWotPulls)(samples, opts);
   if (!pulls.length) return [];
   // Обзор показывает канал скорости как в логе. Подделку VSS (застывшие ~86%)
   // отсекает sm2SanitizeSpeed только в точках расчёта (замок передачи / dyno).
@@ -1262,6 +1313,10 @@ function sm2SessionToWotPulls(session, opts) {
         rpmGain: pull.gain,
         wotIndex: idx + 1,
         wotCount: pulls.length,
+        windowMiss: !!pull.windowMiss,
+        wotAdapted: !!pull.wotAdapted,
+        fallback: !!pull.fallback,
+        kind: pull.kind || null,
       },
     };
   });

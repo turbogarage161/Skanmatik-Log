@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Анализатор разгонов — Scanmatic SM2</title>
-  <link rel="stylesheet" href="styles.css?v=6" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=33"></script>
+  <link rel="stylesheet" href="styles.css?v=7" />
+  <script src="vendor/chart.umd.min.js"></script>
+  <script src="sm2.js?v=34"></script>
 </head>
 <body>
   <div class="app">
@@ -83,13 +83,13 @@
         <div class="dual">
           <div class="dual-head">
             <span>Обороты, начало–конец</span>
-            <strong id="rpmRangeLabel">2000–6000</strong>
+            <strong id="rpmRangeLabel">1000–8000</strong>
             <span class="muted">об/мин</span>
           </div>
           <div class="dual-range" aria-label="Начало и конец оборотов">
             <div class="dual-rail"><div class="dual-fill" id="rpmFill"></div></div>
-            <input type="range" id="rpmMin" min="1000" max="8000" step="100" value="2000" />
-            <input type="range" id="rpmMax" min="1000" max="8000" step="100" value="6000" />
+            <input type="range" id="rpmMin" min="1000" max="8000" step="100" value="1000" />
+            <input type="range" id="rpmMax" min="1000" max="8000" step="100" value="8000" />
           </div>
         </div>
         <label class="slide">
@@ -99,8 +99,8 @@
       </div>
       <div class="settings-sliders">
         <label class="slide">
-          <span class="slide-head">Мин. длительность <strong id="minDurationLabel">3.0 с</strong></span>
-          <input type="range" id="minDuration" min="0.5" max="30" step="0.1" value="3" />
+          <span class="slide-head">Мин. длительность <strong id="minDurationLabel">2.0 с</strong></span>
+          <input type="range" id="minDuration" min="0.5" max="30" step="0.1" value="2" />
         </label>
         <label class="slide">
           <span class="slide-head">Сглаживание <strong id="smoothWindowLabel">5</strong></span>
@@ -131,7 +131,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Обороты — любое начало и конец, без минимальной дельты. В этом диапазоне педаль в WOT; на графике — весь непрерывный набор, а не ширина ползунков.</p>
+      <p class="hint" id="columnHint">Ползунки оборотов задают ось графика (любая ширина). В этом диапазоне педаль в WOT; в списке — полный набор нажатия и роста оборотов. Если фильтр ничего не берёт, лог всё равно показывается.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -140,6 +140,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=65"></script>
+  <script src="app.js?v=66"></script>
 </body>
 </html>

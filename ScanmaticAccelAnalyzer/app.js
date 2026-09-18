@@ -314,7 +314,7 @@ function computeAccelSeries(time, rpm, opts, mode) {
   // link: Math Block dt + лёгкая регрессия для устойчивости на редком OBD
   const link = linkDtPerSec(rpm, time, dtWin);
   const regWin = Math.max(0.25, dtWin * 2);
-  const reg = rollingSlopePerSec(rpm, time, regWin);
+  const reg = rollingSlopePerSec(time, rpm, regWin);
   return time.map((_, i) => {
     const l = link[i];
     const r = reg[i];
@@ -693,9 +693,9 @@ function findPulls(log, opts) {
   const series = time.map((t, i) => ({
     t, rpm: rpm[i], pedal: pedal[i], speed: speed ? speed[i] : null,
   }));
-  const segs = (typeof sm2FindAllWotPulls === "function")
-    ? sm2FindAllWotPulls(series, sm2WotOpts(opts))
-    : [];
+  const segs = (typeof sm2FindPullsForView === "function")
+    ? sm2FindPullsForView(series, sm2WotOpts(opts))
+    : (typeof sm2FindAllWotPulls === "function" ? sm2FindAllWotPulls(series, sm2WotOpts(opts)) : []);
 
   /** @type {Pull[]} */
   const pulls = [];
@@ -749,6 +749,10 @@ function findPulls(log, opts) {
       dynoUnit: dyno.unit,
       gearKv: Number.isFinite(lock.gearKv) ? lock.gearKv : dyno.gearKv,
       speedLock: lock,
+      windowMiss: !!seg.windowMiss,
+      wotAdapted: !!seg.wotAdapted,
+      fallback: !!seg.fallback,
+      kind: seg.kind || null,
       overview: {
         time: time.slice(a, b + 1),
         rpm: rpm.slice(a, b + 1),
@@ -826,8 +830,8 @@ function optsFromUi() {
   return {
     wotFloor: Number.isFinite(wotFloor) ? wotFloor : 70,
     pedalMin: Number.isFinite(wotFloor) ? wotFloor : 70,
-    rpmMin: Number.isFinite(rpmMin) ? rpmMin : 2000,
-    rpmMax: Number.isFinite(rpmMax) ? rpmMax : 6000,
+    rpmMin: Number.isFinite(rpmMin) ? rpmMin : 1000,
+    rpmMax: Number.isFinite(rpmMax) ? rpmMax : 8000,
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
@@ -840,16 +844,50 @@ function sm2WotOpts(opts) {
   return {
     wotFloor: opts.wotFloor ?? opts.pedalMin ?? 70,
     pedalMin: opts.wotFloor ?? opts.pedalMin ?? 70,
-    rpmMin: opts.rpmMin ?? 2000,
-    rpmMax: opts.rpmMax ?? 6000,
-    rpmBandLo: opts.rpmMin ?? 2000,
-    rpmBandHi: opts.rpmMax ?? 6000,
+    rpmMin: opts.rpmMin ?? 1000,
+    rpmMax: opts.rpmMax ?? 8000,
+    rpmBandLo: opts.rpmMin ?? 1000,
+    rpmBandHi: opts.rpmMax ?? 8000,
     minDuration: opts.minDuration,
   };
 }
 
+function sessionAsViewPull(session) {
+  const samples = session.samples || [];
+  if (samples.length < 5) return null;
+  const t0 = samples[0].t;
+  const keepSpeed = session.headers.length >= 4
+    || session.meta?.hasSpeed
+    || samples.some((r) => Number.isFinite(r.speed));
+  const headers = keepSpeed && session.headers.length >= 4
+    ? session.headers
+    : keepSpeed
+      ? [...session.headers.slice(0, 3), "Скорость"]
+      : session.headers;
+  return {
+    headers,
+    rows: samples.map((r) => (keepSpeed
+      ? [r.t - t0, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
+      : [r.t - t0, r.rpm, r.pedal])),
+    absRows: samples.map((r) => (keepSpeed
+      ? [r.t, r.rpm, r.pedal, Number.isFinite(r.speed) ? r.speed : NaN]
+      : [r.t, r.rpm, r.pedal])),
+    label: session.label,
+    meta: {
+      ...session.meta,
+      hasSpeed: keepSpeed,
+      fallback: true,
+      kind: "session",
+    },
+  };
+}
+
 function addWotsFromSession(session, fileName, opts) {
-  const wots = sm2SessionToWotPulls(session, sm2WotOpts(opts));
+  let wots = sm2SessionToWotPulls(session, sm2WotOpts(opts));
+  if (!wots.length) {
+    const whole = sessionAsViewPull(session);
+    if (whole) wots = [whole];
+  }
   let added = 0;
   for (const wot of wots) {
     const log = {
@@ -876,6 +914,10 @@ function addWotsFromSession(session, fileName, opts) {
     const pull = makePullFromAll(log);
     pull.name = wot.label;
     pull.selected = true;
+    pull.windowMiss = !!wot.meta?.windowMiss;
+    pull.wotAdapted = !!wot.meta?.wotAdapted;
+    pull.fallback = !!wot.meta?.fallback;
+    pull.kind = wot.meta?.kind || null;
     log.pulls = [pull];
     logs.push(log);
     added++;
@@ -904,7 +946,7 @@ async function addFiles(fileList) {
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
-          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. На телефоне Сканматик пишет короткие пачки и рампу дросселя — порог WOT можно опустить.`);
+          console.warn(`В «${file.name}» нет кадров оборотов для графика.`);
         }
         continue;
       }
@@ -938,7 +980,9 @@ async function addFiles(fileList) {
       };
       log.pulls = findPulls(log, opts);
       if (!log.pulls.length) {
-        alert(`В «${file.name}» нет WOT-разгона (в диапазоне оборотов педаль/дроссель в WOT на всём отрезке).`);
+        const whole = makePullFromAll(log);
+        whole.selected = true;
+        log.pulls = [whole];
       }
       logs.push(log);
     } catch (e) {
@@ -1029,6 +1073,7 @@ function reanalyzeAll() {
   for (const item of sm2Sources) addWotsFromSession(item.session, item.fileName, opts);
   for (const log of csvLogs) {
     log.pulls = findPulls(log, opts);
+    if (!log.pulls.length) log.pulls = [makePullFromAll(log)];
     log.pulls.forEach((p) => { p.selected = true; });
     logs.push(log);
   }
@@ -1061,6 +1106,20 @@ function renderPullList() {
   }
   box.className = "pull-list";
   box.innerHTML = "";
+  const noteFlags = pulls.filter((p) => p.windowMiss || p.wotAdapted || p.fallback);
+  if (noteFlags.length) {
+    const note = document.createElement("div");
+    note.className = "pull-note";
+    const o = optsFromUi();
+    if (noteFlags.some((p) => p.wotAdapted)) {
+      note.textContent = `В логе дроссель ниже ползунка WOT ${o.wotFloor}% — показаны участки по максимуму PID.`;
+    } else if (noteFlags.some((p) => p.windowMiss)) {
+      note.textContent = `В окне ${o.rpmMin}–${o.rpmMax} об/мин пересечения с WOT нет — показаны все разгоны лога.`;
+    } else {
+      note.textContent = "Строгий WOT не найден — показан набор оборотов из лога, чтобы было что сравнить.";
+    }
+    box.appendChild(note);
+  }
   for (const p of pulls) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1108,7 +1167,7 @@ function renderColumnMap() {
     panel.hidden = true;
     const o = optsFromUi();
     $("columnHint").textContent =
-      `Окно ${o.rpmMin}–${o.rpmMax} об/мин (любая ширина). WOT ≥ ${o.wotFloor}%. Показ — весь непрерывный набор, не ширина ползунков.`;
+      `Ось графика = ползунки ${o.rpmMin}–${o.rpmMax} об/мин. WOT ≥ ${o.wotFloor}%. Список — полный набор (нажатие + рост оборотов), не ширина окна.`;
     return;
   }
   panel.hidden = false;
@@ -1136,6 +1195,7 @@ function renderColumnMap() {
     log.speedCol = Number($("mapSpeed").value);
     const opts = optsFromUi();
     log.pulls = findPulls(log, opts);
+    if (!log.pulls.length) log.pulls = [makePullFromAll(log)];
     renderPullList();
     renderCharts();
     renderStats();
@@ -1150,7 +1210,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
-    `. Окно ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин (любая ширина). WOT ≥ ${optsFromUi().wotFloor}%. Показ — весь непрерывный набор, не ширина ползунков.` +
+    `. Ось графика ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин. WOT ≥ ${optsFromUi().wotFloor}%. В списке — полный набор (нажатие + рост оборотов), не ширина ползунков.` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -1163,18 +1223,31 @@ function metricValue(p, metric, mode = "classic") {
   return mode === "link" ? p.rpmAccelLink : p.rpmAccel;
 }
 
-/** Ось оборотов (X): фиксированный диапазон 2000–7500, шаг 250. */
+/** Ось оборотов (X): как ползунки начала–конца, шаг 250. */
+function rpmAxisRange() {
+  const o = optsFromUi();
+  let min = Number.isFinite(o.rpmMin) ? o.rpmMin : 1000;
+  let max = Number.isFinite(o.rpmMax) ? o.rpmMax : 8000;
+  if (!(max > min)) {
+    const t = min;
+    min = max;
+    max = t;
+  }
+  return { min, max };
+}
+
 function rpmAxisOpts(title = "Обороты, об/мин") {
+  const { min, max } = rpmAxisRange();
   return {
     type: "linear",
-    min: 2000,
-    max: 7500,
+    min,
+    max,
     title: { display: true, text: title, color: "#9aa6b5" },
     ticks: {
       color: "#9aa6b5",
       stepSize: 250,
-      autoSkip: false,
-      maxTicksLimit: 40,
+      autoSkip: true,
+      maxTicksLimit: 18,
       callback: (v) => {
         const n = Number(v);
         if (!Number.isFinite(n)) return "";
@@ -1210,19 +1283,25 @@ function rpmYAxisOpts(min, max) {
   return opts;
 }
 
-const RPM_AXIS_MIN = 2000;
-const RPM_AXIS_MAX = 7500;
 const RPM_AXIS_STEP = 250;
+
+function rpmAxisMin() {
+  return rpmAxisRange().min;
+}
+function rpmAxisMax() {
+  return rpmAxisRange().max;
+}
 
 function syncDeltaSliderExtent() {
   const sl = $("deltaRpm");
   if (!sl) return;
-  sl.min = String(RPM_AXIS_MIN);
-  sl.max = String(RPM_AXIS_MAX);
+  const { min, max } = rpmAxisRange();
+  sl.min = String(min);
+  sl.max = String(max);
   sl.step = String(RPM_AXIS_STEP);
   let v = Number(sl.value);
-  if (!Number.isFinite(v) || v < RPM_AXIS_MIN || v > RPM_AXIS_MAX) {
-    v = 3500;
+  if (!Number.isFinite(v) || v < min || v > max) {
+    v = Math.round(((min + max) / 2) / RPM_AXIS_STEP) * RPM_AXIS_STEP;
   }
   sl.value = String(v);
   const lab = $("deltaRpmLabel");
@@ -1323,8 +1402,9 @@ function activeMainChart() {
 }
 
 function setChartsCursorRpm(rpm, syncSlider = true) {
+  const { min, max } = rpmAxisRange();
   const r = Math.round(Number(rpm) / RPM_AXIS_STEP) * RPM_AXIS_STEP;
-  const clamped = Math.max(RPM_AXIS_MIN, Math.min(RPM_AXIS_MAX, r));
+  const clamped = Math.max(min, Math.min(max, r));
   for (const ch of [accelChartClassic, accelChartLink, accelChartDyno]) {
     if (!ch) continue;
     const changed = ch.$cursorRpm !== clamped;
@@ -1412,7 +1492,7 @@ function buildAccelDatasets(selected, opts, mode) {
       const pts = pull.points
         .filter((p) => {
           const y = metricValue(p, opts.metric, "classic");
-          return Number.isFinite(p.rpm) && Number.isFinite(y) && y > 40;
+          return Number.isFinite(p.rpm) && Number.isFinite(y) && y > 5;
         })
         .map((p) => ({ x: p.rpm, y: metricValue(p, opts.metric, "classic") }));
       return {
@@ -1487,7 +1567,7 @@ function makeAccelChart(canvas, datasets, opts, mode) {
         const xScale = chart.scales.x;
         if (!xScale || evt.x == null) return;
         const rpm = xScale.getValueForPixel(evt.x);
-        if (Number.isFinite(rpm) && rpm >= RPM_AXIS_MIN && rpm <= RPM_AXIS_MAX) {
+        if (Number.isFinite(rpm) && rpm >= rpmAxisMin() && rpm <= rpmAxisMax()) {
           setChartsCursorRpm(rpm, true);
         }
       },
@@ -1665,7 +1745,7 @@ function makeDynoChart(canvas, pack) {
         const xScale = chart.scales.x;
         if (!xScale || evt.x == null) return;
         const rpm = xScale.getValueForPixel(evt.x);
-        if (Number.isFinite(rpm) && rpm >= RPM_AXIS_MIN && rpm <= RPM_AXIS_MAX) {
+        if (Number.isFinite(rpm) && rpm >= rpmAxisMin() && rpm <= rpmAxisMax()) {
           setChartsCursorRpm(rpm, true);
         }
       },
@@ -2133,7 +2213,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Обороты — любое начало и конец, без минимальной дельты. В диапазоне педаль в WOT; на графике — весь непрерывный набор.";
+  $("columnHint").textContent = "Ползунки оборотов — масштаб оси и отбор. В окне педаль в WOT; на графике — весь набор (нажатие + рост), даже если фильтр пустой.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {

@@ -130,6 +130,13 @@ input, select {
 .pull-list { display: flex; flex-direction: column; gap: 3px; }
 .pull-list.empty { color: var(--muted); font-size: 0.92rem; }
 
+.pull-note {
+  color: var(--warn);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  padding: 6px 4px 8px;
+}
+
 .pull-btn {
   appearance: none;
   display: flex;
