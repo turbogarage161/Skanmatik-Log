@@ -1753,7 +1753,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Ползунки: обороты 1000–8000 и педаль/дроссель. Собираются все участки разгона из лога и сравниваются по оборотам.";
+  $("columnHint").textContent = "Обороты — окно-гистерезис: разгон должен пройти сквозь выбранный диапазон, на графике весь набор от начала роста до конца. Педаль/дроссель — только допуск.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {

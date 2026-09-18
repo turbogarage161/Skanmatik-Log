@@ -361,12 +361,22 @@ function sm2MeetsMinDur(dur, minDur, medDt = 0.12) {
   return dur + slack >= minDur;
 }
 
-/** Участок пересекается с выбранным окном оборотов (не обязан целиком накрывать 2500→5000). */
-function sm2CoversRpmBand(rpm0, rpm1, lo = 1000, hi = 8000) {
+/**
+ * Ползунки оборотов — гистерезис: разгон должен пройти через окно [lo, hi].
+ * Не обрезает участок: проверка только «проходит ли набор оборотов сквозь окно».
+ */
+function sm2PassesRpmWindow(rpm0, rpm1, lo = 1000, hi = 8000) {
   if (!Number.isFinite(rpm0) || !Number.isFinite(rpm1) || !(hi > lo)) return false;
   const a = Math.min(rpm0, rpm1);
   const b = Math.max(rpm0, rpm1);
-  return Math.min(b, hi) - Math.max(a, lo) >= 150;
+  const overlap = Math.min(b, hi) - Math.max(a, lo);
+  const need = Math.min(80, Math.max(40, (hi - lo) * 0.08));
+  return overlap >= need;
+}
+
+/** @deprecated имя; то же, что sm2PassesRpmWindow */
+function sm2CoversRpmBand(rpm0, rpm1, lo = 1000, hi = 8000) {
+  return sm2PassesRpmWindow(rpm0, rpm1, lo, hi);
 }
 
 function sm2SegMedDt(rows, a, b) {
@@ -388,9 +398,9 @@ function sm2IsGap(rows, k, gapSec) {
 
 /**
  * Все непрерывные разгоны на одной передаче.
- * Педаль/дроссель — мягкий фильтр: участок не обрезается до порога,
- * достаточно, что в нём есть нагрузка в выбранном окне (или адаптивно, если в логе нет 70%).
- * Без канала педали — рост оборотов с отсечкой медленных «проползаний».
+ * Обороты (ползунки) — гистерезис: участок должен пройти сквозь окно, на график идёт
+ * весь набор оборотов от начала роста до сброса/переключения.
+ * Педаль — только допуск (есть нагрузка в окне), без обрезки начала разгона.
  * @returns {Array<{ a, b, rows, fullThr, maxPedal, dur, gain, score, hasPedal }>}
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
@@ -404,9 +414,6 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   if (hasPedal && maxPedal < pedalMinReq && maxPedal >= 25) {
     pedalMin = Math.max(20, Math.min(pedalMinReq, maxPedal * 0.75));
   }
-  const releaseThr = hasPedal
-    ? Math.max(12, Math.min(pedalMin * 0.65, opts.releasePedal ?? pedalMin * 0.65))
-    : 0;
   const minDur = opts.minDuration ?? 3;
   const minRpmGain = opts.minRpmGain ?? 200;
   const rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 1000;
@@ -418,10 +425,6 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const inLoad = (v) => {
     if (!hasPedal) return true;
     return sm2Ok(v) && v >= pedalMin && v <= pedalMax + 1;
-  };
-  const stayLoad = (v) => {
-    if (!hasPedal) return true;
-    return sm2Ok(v) && v >= releaseThr && v <= Math.min(105, pedalMax + 8);
   };
 
   const candidates = [];
@@ -448,7 +451,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
       if (!(gain >= needGain)) continue;
       if (rps < minRps && !strong) continue;
       if (!hasPedal && rpm1 < 3000) continue;
-      if (!sm2CoversRpmBand(rpm0, rpm1, rpmMin, rpmMax)) continue;
+      if (!sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) continue;
       candidates.push({
         a: rising.a,
         b: rising.b,
@@ -471,26 +474,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     }
   };
 
-  if (!hasPedal) {
-    splitGearAndGaps(0, rows.length - 1);
-  } else {
-    let i = 0;
-    while (i < rows.length) {
-      while (i < rows.length && !stayLoad(rows[i].pedal)) i++;
-      if (i >= rows.length) break;
-      const start = i;
-      i++;
-      while (i < rows.length && stayLoad(rows[i].pedal) && !sm2IsGap(rows, i, gapSec)) i++;
-      const end = i - 1;
-      if (end - start < 3) continue;
-      let hasIn = false;
-      for (let k = start; k <= end; k++) {
-        if (inLoad(rows[k].pedal)) { hasIn = true; break; }
-      }
-      if (!hasIn) continue;
-      splitGearAndGaps(start, end);
-    }
-  }
+  splitGearAndGaps(0, rows.length - 1);
 
   if (!candidates.length && hasPedal) {
     const sorted = [...pedals].sort((a, b) => a - b);
