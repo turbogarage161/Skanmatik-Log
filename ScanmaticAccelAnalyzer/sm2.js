@@ -782,9 +782,9 @@ function sm2BurstPedalMax(rows, from, to) {
   return Number.isFinite(m) ? m : NaN;
 }
 
-/** Допуск «педаль не меняется»: шаг кадра и размах полки WOT. */
-const SM2_WOT_STEP = 4;
-const SM2_WOT_HOLD_SPAN = 6;
+/** Допуск «педаль не меняется»: шум OBD до 2%, больше — смена положения. */
+const SM2_WOT_STEP = 2;
+const SM2_WOT_HOLD_SPAN = 2;
 
 /**
  * Педаль/дроссель — жёсткий допуск по ползунку.
@@ -835,12 +835,12 @@ function sm2SettleToHoldLevel(rows, a, b) {
   let e = b;
   while (s < e - 2) {
     const p = rows[s].pedal;
-    if (sm2Ok(p) && p >= level - 2.5) break;
+    if (sm2Ok(p) && p >= level - 2) break;
     s++;
   }
   while (e > s + 2) {
     const p = rows[e].pedal;
-    if (sm2Ok(p) && p >= level - 2.5) break;
+    if (sm2Ok(p) && p >= level - 2) break;
     e--;
   }
   return { a: s, b: e };
@@ -900,9 +900,9 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, holdStep = SM2_WOT_STEP,
     if (settled.b - settled.a < 2) continue;
     const ped = sm2SegPedalStats(rows, settled.a, settled.b);
     if (!ped || ped.max < wotFloor - 0.25) continue;
-    if (ped.max - ped.min > holdSpan + 0.5) continue;
+    if (ped.max - ped.min > holdSpan + 0.05) continue;
     const level = ped.med;
-    const stableN = ped.vals.filter((v) => Math.abs(v - level) <= 2.5).length;
+    const stableN = ped.vals.filter((v) => Math.abs(v - level) <= 2).length;
     if (stableN < Math.max(3, ped.n * 0.7)) continue;
     out.push(settled);
   }
@@ -947,7 +947,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     if (hasPedal) {
       const ped = sm2SegPedalStats(rows, a, b);
       if (!ped || ped.max < wotFloor - 0.25) return;
-      if (ped.max - ped.min > SM2_WOT_HOLD_SPAN + 0.5) return;
+      if (ped.max - ped.min > SM2_WOT_HOLD_SPAN + 0.05) return;
     } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1 })) {
       return;
     }
