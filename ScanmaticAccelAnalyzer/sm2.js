@@ -1,21 +1,31 @@
 /**
  * Парсер Scanmatik SMFS (.sm2) — OBD-II Livedata.
  *
- * Файл может содержать НЕСКОЛЬКО прогонов (TOC), каждый с FILETIME
- * (подписи как в Сканматике: «17.09.2026 14:43»).
+ * Особенности файла:
+ *   • магия SMFS; TOC с @0x19 по 20 байт (unk, FILETIME, type, size) до паддинга FF.
+ *     Байт @0x10 часто = 2 при 3–6 реальных прогонах — длину TOC по нему не брать.
+ *   • сессии: маркер 01 FF FF FF FF с 0x400; хвостовые пустые блоки 0x400 без имён — отброс.
+ *   • 2 канала (компакт): f64 rpm | i32 t_ms | f64 thr | i32 t_next  (24 Б, шаг 24…33).
+ *   • N>2: на канал f64 | i64 t_ms | i64         (24×N).
+ *   • ПК ~7–10 Гц (dt≈0.13 с). Телефон ~4 Гц (dt≈0.26 с) и паузы 7–12 с — это не один разгон.
+ *   • Ford Absolute Throttle WOT ≈ 85.88% (219/255), не 100%.
+ *   • в хвосте сессии иногда мусорные timestamp (часы) — отрезаем основной кластер времени.
  *
- * 2 канала (компакт):
- *   float64 rpm | int32 time_ms | float64 pedal/thr | int32 time2   (24 байта)
- *
- * N>2 каналов:
- *   на канал: float64 value | int64 time_ms | int64 reserved         (24×N)
- *
- * Раскладки Сканматика (OBD-II Livedata), на которых учится детектор:
- *   2ch ПК:  обороты + абсолютное положение дросселя (WOT Ford ≈ 86% = 219/255)
+ * Раскладки, на которых учится детектор:
+ *   2ch ПК:  обороты + абсолютное положение дросселя
  *   3ch:     обороты + скорость + дроссель
  *   4ch:     MAP + обороты + УОЗ + лямбда (педали нет — только рост оборотов)
  *   5ch:     обороты + скорость + УОЗ + дроссель + лямбда
  */
+
+/** Шум OBD (об/мин), не переключение. Телефон ±40–50, ПК-блип перед разгоном ~60–120. */
+const SM2_OBD_DIP = 60;
+/** Сброс оборотов на другую передачу. */
+const SM2_GEAR_DROP = 250;
+/** Пауза записи (телефон 7–12 с) — новый участок. */
+const SM2_GAP_SEC = 2.5;
+/** Разрыв timestamp, после которого кадры считаем мусором. */
+const SM2_JUNK_GAP = 90;
 
 const SM2_SAMPLE = 24;
 
@@ -85,44 +95,48 @@ const SM2_SPEED_KEYS = [
   "скорость автомобиля", "скорость тс", "vehicle speed", "vss", "скорость", "speed", "км/ч", "km/h",
 ];
 
-/** TOC: byte@0x10 = count; entries @0x19, 20 bytes each */
+/** TOC: записи по 20 байт с @0x19 до паддинга 0xFF. Байт @0x10 часто = 2 даже при 3–5 прогонах. */
 function sm2ParseToc(view, u8) {
-  const count = u8[0x10] >= 1 && u8[0x10] <= 32 ? u8[0x10] : 1;
   const entries = [];
   let off = 0x19;
-  for (let i = 0; i < count; i++) {
-    if (off + 20 > u8.length || u8[off] === 0xff) break;
+  for (let i = 0; i < 32; i++) {
+    if (off + 20 > u8.length) break;
+    if (u8[off] === 0xff && u8[off + 1] === 0xff) break;
     const unk = sm2ReadU32(view, off);
     const ft = sm2ReadI64(view, off + 4);
     const type = sm2ReadU32(view, off + 12);
     const size = sm2ReadU32(view, off + 16);
     const date = sm2FileTimeToDate(ft);
-    if (size > 0 && size < u8.length * 2) {
-      entries.push({
-        index: i,
-        unk,
-        type,
-        size,
-        filetime: ft,
-        date,
-        label: date ? sm2FormatStamp(date) : `Прогон ${i + 1}`,
-      });
-    }
+    if (!(size > 64 && size < u8.length * 2)) break;
+    entries.push({
+      index: i,
+      unk,
+      type,
+      size,
+      filetime: ft,
+      date,
+      label: date ? sm2FormatStamp(date) : `Прогон ${i + 1}`,
+    });
     off += 20;
   }
   return entries;
 }
 
-/** Начала блоков «Переменные» / сессий */
-function sm2FindSessionStarts(u8) {
-  const starts = [];
-  for (let i = 0x400; i < Math.min(u8.length - 8, 0x100000); i++) {
-    // 01 FF FF FF FF  + uint32
+/** Начала блоков «Переменные». Хвостовые пустые маркеры (без имён каналов) отбрасываем. */
+function sm2FindSessionStarts(u8, view) {
+  if (!view) view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const raw = [];
+  for (let i = 0x400; i < Math.min(u8.length - 8, 0x400000); i++) {
     if (u8[i] === 0x01 && u8[i + 1] === 0xff && u8[i + 2] === 0xff && u8[i + 3] === 0xff && u8[i + 4] === 0xff) {
-      starts.push(i);
+      raw.push(i);
     }
   }
-  return starts;
+  return raw.filter((from, idx) => {
+    const to = idx + 1 < raw.length ? raw[idx + 1] : u8.length;
+    if (to - from < 0x200) return false;
+    const names = sm2ExtractNamesInRange(view, u8, from, Math.min(from + 0xA00, to));
+    return names.length >= 1;
+  });
 }
 
 function sm2ExtractNamesInRange(view, u8, from, to) {
@@ -248,7 +262,8 @@ function sm2ExtractCompact2ch(view, from, to) {
   // типичный SM OBD ~7–10 Гц (0.1–0.15 с); отсекаем явный мусор
   if (med < 0.02 || med > 2.0) return [];
 
-  return series.map(({ t, rpm, pedal }) => ({ t, rpm, pedal }));
+  const compactRows = series.map(({ t, rpm, pedal }) => ({ t, rpm, pedal }));
+  return sm2KeepMainTimeCluster(compactRows);
 }
 
 /** Формат N каналов: кадр = N × (f64, i64 time, i64) */
@@ -343,23 +358,65 @@ function sm2ExtractMultiCh(view, from, to, nCh, names) {
     rows.push({ t: a.t / 1000, rpm: rpmVal, pedal, speed });
   }
   rows.sort((a, b) => a.t - b.t);
-  sm2DropFrozenSpeed(rows);
-  return rows;
+  const clustered = sm2KeepMainTimeCluster(rows);
+  sm2SanitizeSpeed(clustered);
+  return clustered;
+}
+
+/**
+ * Основной кластер времени: отбрасываем хвост, где i64 прочитался как мусор
+ * (скачки на десятки тысяч секунд при живой сессии в пределах минут).
+ */
+function sm2KeepMainTimeCluster(rows) {
+  if (!rows || rows.length < 6) return rows || [];
+  const ts = rows.map((r) => r.t).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  if (ts.length < 6) return rows;
+  let bestA = 0;
+  let bestB = 0;
+  let a = 0;
+  for (let i = 1; i <= ts.length; i++) {
+    if (i === ts.length || ts[i] - ts[i - 1] > SM2_JUNK_GAP) {
+      if (i - 1 - a > bestB - bestA) {
+        bestA = a;
+        bestB = i - 1;
+      }
+      a = i;
+    }
+  }
+  const lo = ts[bestA];
+  const hi = ts[bestB];
+  return rows.filter((r) => r.t >= lo - 1 && r.t <= hi + 1);
 }
 
 /** Сканматик иногда пишет «скорость» как застывшее 219/255·100, пока растут обороты. */
 function sm2DropFrozenSpeed(rows) {
-  if (!rows || rows.length < 8) return;
+  if (!rows || rows.length < 6) return;
   const withSp = rows.filter((r) => Number.isFinite(r.speed) && r.speed > 0);
-  if (withSp.length < 6) return;
+  if (withSp.length < 4) return;
   const rpmSpan = Math.max(...rows.map((r) => r.rpm)) - Math.min(...rows.map((r) => r.rpm));
-  if (rpmSpan < 1200) return;
   const speeds = withSp.map((r) => r.speed);
   const spSpan = Math.max(...speeds) - Math.min(...speeds);
   const mid = speeds.slice().sort((a, b) => a - b)[Math.floor(speeds.length / 2)];
   const frozen = speeds.filter((s) => Math.abs(s - mid) < 1.5).length / speeds.length;
-  if ((spSpan < 10 && frozen > 0.6) || frozen > 0.75) {
+  const fordWot = Math.abs(mid - (219 / 255) * 100) < 1.2;
+  if (rpmSpan > 600 && spSpan < 4) {
     for (const r of rows) r.speed = null;
+    return;
+  }
+  if (rpmSpan >= 1200 && ((spSpan < 10 && frozen > 0.6) || frozen > 0.75 || (fordWot && frozen > 0.5 && spSpan < 15))) {
+    for (const r of rows) r.speed = null;
+  }
+}
+
+function sm2SanitizeSpeed(rows) {
+  if (!rows || rows.length < 6) return;
+  sm2DropFrozenSpeed(rows);
+  const both = rows.filter((r) => Number.isFinite(r.speed) && Number.isFinite(r.pedal));
+  if (both.length >= 8) {
+    const close = both.filter((r) => Math.abs(r.speed - r.pedal) < 3).length;
+    if (close / both.length > 0.7) {
+      for (const r of rows) r.speed = null;
+    }
   }
 }
 
@@ -368,30 +425,59 @@ function sm2LongestRising(rows, from, to) {
   let bestB = from;
   let a = from;
   for (let k = from + 1; k <= to; k++) {
-    if (rows[k].rpm + 30 < rows[k - 1].rpm) {
+    if (rows[k].rpm + SM2_OBD_DIP < rows[k - 1].rpm) {
       if (k - 1 - a > bestB - bestA) { bestA = a; bestB = k - 1; }
       a = k;
     }
   }
   if (to - a > bestB - bestA) { bestA = a; bestB = to; }
   if (bestB - bestA < 3) return null;
-  return { a: bestA, b: bestB };
+  return sm2TrimClimb(rows, bestA, bestB);
 }
 
-/** Все участки монотонного роста оборотов в [from..to]. */
+/** Конец участка — последняя полка у максимума оборотов (не хвост после срыва). */
+function sm2TrimClimb(rows, a, b) {
+  if (b - a < 3) return { a, b };
+  let maxRpm = rows[a].rpm;
+  for (let i = a; i <= b; i++) if (rows[i].rpm > maxRpm) maxRpm = rows[i].rpm;
+  let end = a;
+  for (let i = a; i <= b; i++) {
+    if (rows[i].rpm >= maxRpm - 12) end = i;
+  }
+  return { a, b: Math.min(b, Math.max(end, a)) };
+}
+
+/** Все участки роста оборотов в [from..to], с допуском шума OBD. */
 function sm2AllRisingSegments(rows, from, to) {
   const segs = [];
   if (to - from < 3) return segs;
   let a = from;
   for (let k = from + 1; k <= to; k++) {
-    const dropped = rows[k].rpm + 30 < rows[k - 1].rpm;
+    const dropped = rows[k].rpm + SM2_OBD_DIP < rows[k - 1].rpm;
     if (dropped || k === to) {
       const b = dropped ? k - 1 : to;
-      if (b - a >= 3) segs.push({ a, b });
+      if (b - a >= 3) {
+        const trim = sm2TrimClimb(rows, a, b);
+        if (trim.b - trim.a >= 3) segs.push(trim);
+      }
       a = k;
     }
   }
   return segs;
+}
+
+/** Переключение: резкий сброс об/мин или скачок rpm/скорость при живом VSS. */
+function sm2IsGearChange(rows, k) {
+  if (k <= 0 || k >= rows.length) return false;
+  const drop = rows[k - 1].rpm - rows[k].rpm;
+  if (drop > SM2_GEAR_DROP) return true;
+  const s0 = rows[k - 1].speed;
+  const s1 = rows[k].speed;
+  if (!(s0 > 8) || !(s1 > 8) || drop < 80) return false;
+  const r0 = rows[k - 1].rpm / s0;
+  const r1 = rows[k].rpm / s1;
+  if (!(r0 > 1) || !(r1 > 1)) return false;
+  return Math.abs(r1 - r0) / r0 > 0.18;
 }
 
 /** Учёт редкого OBD: длительность + запас на 2–3 кадра. */
@@ -433,7 +519,9 @@ function sm2SegMedDt(rows, a, b) {
 function sm2IsGap(rows, k, gapSec) {
   if (k <= 0 || k >= rows.length) return false;
   const dt = rows[k].t - rows[k - 1].t;
-  return Number.isFinite(dt) && dt > gapSec;
+  if (!Number.isFinite(dt)) return false;
+  if (dt < -0.2) return true;
+  return dt > gapSec;
 }
 
 /**
@@ -458,7 +546,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const minRpmGain = opts.minRpmGain ?? 200;
   const rpmMin = opts.rpmMin ?? opts.rpmBandLo ?? 1000;
   const rpmMax = opts.rpmMax ?? opts.rpmBandHi ?? 8000;
-  const gapSec = opts.gapSec ?? 2.5;
+  const gapSec = opts.gapSec ?? SM2_GAP_SEC;
   const maxDur = opts.maxDuration ?? 22;
   const minRps = opts.minRps ?? (hasPedal ? 45 : 80);
 
@@ -513,7 +601,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     let segStart = from;
     for (let k = from + 1; k <= to + 1; k++) {
       const atEnd = k > to;
-      const drop = !atEnd && rows[k - 1].rpm - rows[k].rpm > 250;
+      const drop = !atEnd && sm2IsGearChange(rows, k);
       const gap = !atEnd && sm2IsGap(rows, k, gapSec);
       if (!drop && !gap && !atEnd) continue;
       consider(segStart, drop || gap ? k - 1 : to);
@@ -579,8 +667,8 @@ function parseSm2ArrayBuffer(buffer) {
   const magic = String.fromCharCode(u8[0], u8[1], u8[2], u8[3]);
   if (magic !== "SMFS") throw new Error("Это не лог Scanmatik (нет SMFS)");
 
-  const toc = sm2ParseToc(view, u8);
-  let starts = sm2FindSessionStarts(u8);
+  const toc = sm2ParseToc(view, u8).filter((e) => e.size >= 512);
+  let starts = sm2FindSessionStarts(u8, view);
   if (!starts.length) starts = [0x400];
 
   // TOC в файле обычно в хронологическом порядке; UI Сканматика — новые сверху.
@@ -613,6 +701,9 @@ function parseSm2ArrayBuffer(buffer) {
     }
 
     if (samples.length < 5) continue;
+    samples = sm2KeepMainTimeCluster(samples);
+    if (samples.length < 5) continue;
+    sm2SanitizeSpeed(samples);
 
     const rpmName = names.find((n) => sm2NameScore(n.name, SM2_RPM_KEYS) >= 40)?.name || "Обороты двигателя";
     const pedalName =
@@ -668,6 +759,7 @@ function sm2SessionToWotPulls(session, opts) {
   }));
   const pulls = sm2FindAllWotPulls(samples, opts);
   if (!pulls.length) return [];
+  for (const pull of pulls) sm2SanitizeSpeed(pull.rows);
 
   const hasSpeed = session.meta?.hasSpeed || samples.some((r) => Number.isFinite(r.speed));
   const headers = hasSpeed && session.headers.length >= 4

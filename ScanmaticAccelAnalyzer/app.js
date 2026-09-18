@@ -549,7 +549,8 @@ function findPulls(log, opts) {
     const points = [];
     for (let k = a; k <= b; k++) {
       const prevRpm = k > a ? rpm[k - 1] : rpm[k];
-      if (k > a && rpm[k] + 20 < prevRpm) continue;
+      const dip = (typeof SM2_OBD_DIP === "number") ? SM2_OBD_DIP : 80;
+      if (k > a && rpm[k] + dip < prevRpm) continue;
       const aClassic = rpmAccelClassic[k];
       const aLink = rpmAccelLink[k];
       if (!Number.isFinite(aClassic) && !Number.isFinite(aLink)) continue;
@@ -798,7 +799,7 @@ function makePullFromAll(log) {
   }
   const points = [];
   for (let k = 0; k < time.length; k++) {
-    if (k > 0 && rpm[k] + 20 < rpm[k - 1]) continue;
+    if (k > 0 && rpm[k] + ((typeof SM2_OBD_DIP === "number") ? SM2_OBD_DIP : 80) < rpm[k - 1]) continue;
     if (!Number.isFinite(rpmAccel[k]) && !Number.isFinite(rpmAccelLink[k])) continue;
     points.push({
       t: time[k] - time[0],
@@ -1812,6 +1813,18 @@ function bindDualRange(minId, maxId, fillId, labelId, fmt, minGap) {
   };
   if (minEl) minEl.addEventListener("input", onInput);
   if (maxEl) maxEl.addEventListener("input", onInput);
+  const raise = (el) => {
+    if (minEl) minEl.classList.toggle("dual-top", el === minEl);
+    if (maxEl) maxEl.classList.toggle("dual-top", el === maxEl);
+  };
+  if (minEl) {
+    minEl.addEventListener("pointerdown", () => raise(minEl));
+    minEl.addEventListener("focus", () => raise(minEl));
+  }
+  if (maxEl) {
+    maxEl.addEventListener("pointerdown", () => raise(maxEl));
+    maxEl.addEventListener("focus", () => raise(maxEl));
+  }
   sync();
 }
 
