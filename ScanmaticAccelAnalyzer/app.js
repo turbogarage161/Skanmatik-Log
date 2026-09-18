@@ -531,7 +531,9 @@ function findPulls(log, opts) {
   const win = Math.max(1, opts.smoothWindow | 0);
   const rpmLo = opts.rpmBandLo ?? 1000;
   const rpmHi = opts.rpmBandHi ?? 8000;
+  const pedalRelease = Math.max(0, pedalLo - 15);
   const inPedal = (v) => Number.isFinite(v) && v >= pedalLo && v <= pedalHi;
+  const stayPedal = (v) => Number.isFinite(v) && v > pedalRelease && v <= pedalHi;
 
   // На исходных сэмплах (как в ECU/Link) — без апсемплинга
   const rpmAccelClassic = computeAccelSeries(time, rpm, { dtWindow: dtWin, smoothWindow: win }, "classic");
@@ -615,7 +617,7 @@ function findPulls(log, opts) {
     while (i < pedal.length && !inPedal(pedal[i])) i++;
     if (i >= pedal.length) break;
     const start = i;
-    while (i < pedal.length && inPedal(pedal[i])) i++;
+    while (i < pedal.length && stayPedal(pedal[i])) i++;
     const end = i - 1;
     if (end <= start) continue;
 
@@ -772,6 +774,38 @@ function uid() {
   return `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function sm2DetectOpts(opts) {
+  return {
+    pedalLo: opts.pedalLo,
+    pedalHi: opts.pedalHi,
+    rpmBandLo: opts.rpmBandLo,
+    rpmBandHi: opts.rpmBandHi,
+    minDuration: opts.minDuration,
+    minRpmGain: 200,
+  };
+}
+
+function pullsFromSm2Session(log, session, opts) {
+  const wots = sm2SessionToWotPulls(session, sm2DetectOpts(opts));
+  const hasSpeed = !!(session.meta?.hasSpeed && (session.headers.length >= 4 || wots.some((w) => w.headers.length >= 4)));
+  return wots.map((wot, i) => {
+    const tmp = {
+      id: log.id,
+      name: wots.length > 1 ? `${session.label} · #${i + 1}` : session.label,
+      headers: wot.headers,
+      rows: wot.rows,
+      timeCol: 0,
+      rpmCol: 1,
+      pedalCol: 2,
+      speedCol: hasSpeed && wot.headers.length >= 4 ? 3 : -1,
+    };
+    const pull = makePullFromAll(tmp);
+    pull.name = tmp.name;
+    pull.selected = true;
+    return pull;
+  });
+}
+
 async function addFiles(fileList) {
   const opts = optsFromUi();
   for (const file of fileList) {
@@ -800,11 +834,9 @@ async function addFiles(fileList) {
             colorBase: COLORS[colorIdx % COLORS.length],
             rawName: file.name,
             sm2meta: session.meta,
+            sm2session: session,
           };
-          log.pulls = findPulls(log, opts);
-          if (log.pulls.length > 1) {
-            log.pulls.forEach((p, i) => { p.name = `${session.label} · #${i + 1}`; });
-          }
+          log.pulls = pullsFromSm2Session(log, session, opts);
           logs.push(log);
           addedPulls += log.pulls.length;
         }
@@ -918,9 +950,13 @@ function reanalyzeAll() {
   colorIdx = 0;
   for (const log of logs) {
     const selectedIds = new Set(log.pulls.filter((p) => p.selected).map((p) => p.name));
-    log.pulls = findPulls(log, opts);
-    if (log.pulls.length > 1) {
-      log.pulls.forEach((p, i) => { p.name = `${log.name} · #${i + 1}`; });
+    if (log.sm2session) {
+      log.pulls = pullsFromSm2Session(log, log.sm2session, opts);
+    } else {
+      log.pulls = findPulls(log, opts);
+      if (log.pulls.length > 1) {
+        log.pulls.forEach((p, i) => { p.name = `${log.name} · #${i + 1}`; });
+      }
     }
     log.pulls.forEach((p, i) => { p.selected = i < 3 || selectedIds.has(p.name); });
   }

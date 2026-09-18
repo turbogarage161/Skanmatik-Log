@@ -399,7 +399,10 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   };
   const stayPedal = (v) => {
     if (!sm2Ok(v)) return false;
-    if (pedalLo != null && pedalHi != null) return v >= pedalLo && v <= pedalHi;
+    if (pedalLo != null && pedalHi != null) {
+      const release = Math.max(0, pedalLo - 15);
+      return v > release && v <= pedalHi;
+    }
     return v > releaseThr;
   };
   const minDur = opts.minDuration ?? 3;
@@ -449,7 +452,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     }
   }
 
-  if (!candidates.length) {
+  if (!candidates.length && pedalLo == null) {
     const sorted = [...pedals].sort((a, b) => a - b);
     const hi = sorted[Math.floor(sorted.length * 0.75)];
     const thr2 = Math.max(floor * 0.9, hi * 0.92);
