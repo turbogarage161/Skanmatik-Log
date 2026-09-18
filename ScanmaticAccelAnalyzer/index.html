@@ -2,29 +2,40 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#12151a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="SM2 разгон" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Анализатор разгонов — Scanmatic SM2</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=10"></script>
+  <script src="sm2.js?v=11"></script>
 </head>
 <body>
   <div class="app">
     <header class="header">
       <div>
         <h1>Анализатор разгонов SM2</h1>
-        <p class="subtitle">Scanmatic .sm2 → WOT → полка / Virtual Dyno (P/m=a·v) → сравнение по оборотам</p>
+        <p class="subtitle">ПК и Android · .sm2 → фильтр оборотов/педали → полка / Virtual Dyno → сравнение</p>
       </div>
-      <label class="btn primary file-btn">
-        Загрузить .sm2
-        <input type="file" id="fileInput" accept=".sm2,application/octet-stream" multiple hidden />
-      </label>
+      <div class="header-actions">
+        <button type="button" class="btn" id="installBtn" hidden>На экран Android</button>
+        <label class="btn primary file-btn">
+          Загрузить .sm2
+          <input type="file" id="fileInput" accept=".sm2,application/octet-stream" multiple hidden />
+        </label>
+      </div>
     </header>
 
     <section class="layout">
       <aside class="panel pulls">
         <h2>Найденные разгоны</h2>
-        <div id="pullList" class="pull-list empty">Загрузите один или несколько логов .sm2 (OBD-II).</div>
+        <div id="pullList" class="pull-list empty">Загрузите один или несколько логов .sm2 (ПК или телефон).</div>
         <div class="actions sticky">
           <button type="button" class="btn" id="exportBtn" disabled>Экспорт выбранного CSV</button>
           <button type="button" class="btn" id="pngBtn" disabled>Сохранить график PNG</button>
@@ -56,7 +67,7 @@
           <div class="delta-bar" id="deltaBar">
             <div class="delta-slider-row">
               <label for="deltaRpm">Обороты для Δ%</label>
-              <input type="range" id="deltaRpm" min="2000" max="7500" step="250" value="3500" />
+              <input type="range" id="deltaRpm" min="1000" max="8000" step="250" value="3500" />
               <strong id="deltaRpmLabel">3500</strong>
               <span class="muted">об/мин</span>
             </div>
@@ -78,26 +89,44 @@
     </section>
 
     <section class="panel settings">
-      <h2>Детекция полного газа (педаль / дроссель OBD-II)</h2>
-      <div class="grid">
+      <h2>Фильтры разгона</h2>
+      <div class="filters-compact">
+        <div class="dual">
+          <div class="dual-head">
+            <span>Обороты</span>
+            <strong id="rpmRangeLabel">1000–8000</strong>
+            <span class="muted">об/мин</span>
+          </div>
+          <div class="dual-range" aria-label="Диапазон оборотов">
+            <div class="dual-rail"><div class="dual-fill" id="rpmFill"></div></div>
+            <input type="range" id="rpmMin" min="1000" max="8000" step="100" value="1000" />
+            <input type="range" id="rpmMax" min="1000" max="8000" step="100" value="8000" />
+          </div>
+        </div>
+        <div class="dual">
+          <div class="dual-head">
+            <span>Педаль / дроссель</span>
+            <strong id="pedalRangeLabel">70–100</strong>
+            <span class="muted">%</span>
+          </div>
+          <div class="dual-range" aria-label="Диапазон педали или дросселя">
+            <div class="dual-rail"><div class="dual-fill" id="pedalFill"></div></div>
+            <input type="range" id="pedalMin" min="0" max="100" step="1" value="70" />
+            <input type="range" id="pedalMax" min="0" max="100" step="1" value="100" />
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-compact">
         <label>
-          Полный газ ≥ % (если меньше макс. в логе — берётся ~88% от макс.)
-          <input type="number" id="fullPedal" value="80" min="50" max="100" step="1" />
+          Мин. длительность, с
+          <input type="number" id="minDuration" value="2.5" min="0.5" max="30" step="0.1" />
         </label>
         <label>
-          Отпущена ≤ %
-          <input type="number" id="releasePedal" value="40" min="0" max="70" step="1" />
-        </label>
-        <label>
-          Мин. длительность разгона, с
-          <input type="number" id="minDuration" value="3" min="0.5" max="30" step="0.1" />
-        </label>
-        <label>
-          Сглаживание (окно) — вкладка «Ускорение · dRPM/dt»
+          Сглаживание (окно) · dRPM/dt
           <input type="number" id="smoothWindow" value="5" min="1" max="31" step="2" />
         </label>
         <label>
-          Окно dt Link, с — вкладка «Момент · полка Link»
+          Окно dt Link, с
           <input type="number" id="dtWindow" value="0.2" min="0.05" max="1" step="0.05" />
         </label>
         <label>
@@ -112,7 +141,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Выборка: педаль/дроссель в пол + рост оборотов; доп. фильтр — прогон накрывает 2500→5000 об/мин, ≥3 с.</p>
+      <p class="hint" id="columnHint">Ползунки с двух сторон: обороты 1000–8000 и педаль/дроссель как в логе. Логи Сканматика с ПК и Android.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -121,6 +150,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>
