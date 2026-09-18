@@ -1646,6 +1646,59 @@ function makeDynoChart(canvas, pack) {
   });
 }
 
+function sampleRateFromTimes(time) {
+  if (!time || time.length < 2) return null;
+  const dts = [];
+  for (let i = 1; i < time.length; i++) {
+    const dt = time[i] - time[i - 1];
+    if (Number.isFinite(dt) && dt > 1e-4 && dt < 2.5) dts.push(dt);
+  }
+  if (!dts.length) return null;
+  dts.sort((a, b) => a - b);
+  const med = dts[Math.floor(dts.length / 2)];
+  if (!(med > 0)) return null;
+  return { dt: med, hz: 1 / med, n: time.length };
+}
+
+function fmtHz(hz) {
+  if (!Number.isFinite(hz) || hz <= 0) return "—";
+  if (hz >= 20) return hz.toFixed(0);
+  if (hz >= 10) return hz.toFixed(1);
+  return hz.toFixed(1);
+}
+
+function fmtSampleRate(info) {
+  if (!info) return "";
+  return `${fmtHz(info.hz)} Гц · шаг ${info.dt.toFixed(2)} с · ${info.n} т.`;
+}
+
+/** Подпись частоты фиксации оборотов в углу обзора. */
+const overviewRatePlugin = {
+  id: "overviewRate",
+  afterDraw(chart) {
+    const lines = chart.options?.plugins?.overviewRate?.lines || chart.$rateLines;
+    if (!lines?.length) return;
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return;
+    ctx.save();
+    ctx.font = "600 11px Segoe UI, Tahoma, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    let y = chartArea.top + 4;
+    const x = chartArea.left + 8;
+    for (const line of lines) {
+      const text = line.text;
+      const w = ctx.measureText(text).width;
+      ctx.fillStyle = "rgba(18, 21, 26, 0.72)";
+      ctx.fillRect(x - 4, y - 2, w + 8, 16);
+      ctx.fillStyle = line.color || "#c5d0dc";
+      ctx.fillText(text, x, y);
+      y += 16;
+    }
+    ctx.restore();
+  },
+};
+
 function renderCharts() {
   const opts = optsFromUi();
   const selected = selectedPulls();
@@ -1713,9 +1766,38 @@ function renderCharts() {
     ? Math.max(80, ...aligned.flatMap((s) => s.spdPts.map((p) => p.y).filter(Number.isFinite)))
     : 110;
   const y1Max = showSpeed ? Math.max(showPedal ? 110 : 0, Math.ceil(spdMax / 10) * 10) : 110;
+  const rates = selected.map((p) => ({
+    pull: p,
+    info: sampleRateFromTimes(p.overview?.time),
+  })).filter((x) => x.info);
+  const rateLines = [];
+  if (rates.length === 1) {
+    rateLines.push({
+      color: rates[0].pull.color,
+      text: `Обороты: ${fmtSampleRate(rates[0].info)}`,
+    });
+  } else if (rates.length > 1) {
+    const hz0 = rates[0].info.hz;
+    const same = rates.every((r) => Math.abs(r.info.hz - hz0) / hz0 < 0.12);
+    if (same) {
+      rateLines.push({
+        color: "#c5d0dc",
+        text: `Обороты: ${fmtHz(hz0)} Гц · шаг ${rates[0].info.dt.toFixed(2)} с`,
+      });
+    } else {
+      for (const r of rates) {
+        rateLines.push({
+          color: r.pull.color,
+          text: `${r.pull.name}: ${fmtHz(r.info.hz)} Гц · шаг ${r.info.dt.toFixed(2)} с · ${r.info.n} т.`,
+        });
+      }
+    }
+  }
+  const hzByPull = new Map(rates.map((r) => [r.pull, r.info]));
   for (const { pull, rpmPts, pedPts, spdPts } of aligned) {
+    const info = hzByPull.get(pull);
     overDatasets.push({
-      label: pull.name,
+      label: info ? `${pull.name} · ${fmtHz(info.hz)} Гц` : pull.name,
       data: rpmPts,
       yAxisID: "y",
       borderColor: pull.color,
@@ -1762,11 +1844,12 @@ function renderCharts() {
   overviewChart = new Chart(overCtx, {
     type: "line",
     data: { datasets: overDatasets },
+    plugins: [overviewRatePlugin],
     options: {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "nearest", intersect: false, axis: "x" },
-      layout: { padding: { top: 4 } },
+      layout: { padding: { top: 6 } },
       scales: {
         x: {
           type: "linear",
@@ -1811,19 +1894,28 @@ function renderCharts() {
             font: { size: 11 },
           },
         },
+        overviewRate: { lines: rateLines },
       },
     },
   });
 
   const lockOn = selected.some((p) => p.speedLock?.applied);
   const lockSlip = selected.some((p) => p.speedLock?.usable && p.speedLock?.cv > 0.12);
+  const rateHint = rates.length
+    ? (rates.length === 1 || rates.every((r) => Math.abs(r.info.hz - rates[0].info.hz) / rates[0].info.hz < 0.12)
+      ? `фиксация оборотов ${fmtHz(rates[0].info.hz)} Гц (шаг ${rates[0].info.dt.toFixed(2)} с)`
+      : rates.map((r) => `${fmtHz(r.info.hz)} Гц`).join(" / "))
+    : "";
   $("overviewHint").textContent = selected.length > 1
     ? (alignedPack.useSpeed
-      ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : ""}${showSpeed ? " · скорость точками" : ""}`
-      : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : (showSpeed ? " · скорость точками" : " · только обороты")}`)
-    : (showPedal || showSpeed
-      ? `${selected[0].name} · ${[showPedal ? "педаль/дроссель пунктиром" : "", showSpeed ? "скорость точками" : ""].filter(Boolean).join(" · ")}`
-      : selected[0].name);
+      ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : ""}${showSpeed ? " · скорость точками" : ""}${rateHint ? ` · ${rateHint}` : ""}`
+      : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : (showSpeed ? " · скорость точками" : " · только обороты")}${rateHint ? ` · ${rateHint}` : ""}`)
+    : ([
+      selected[0].name,
+      showPedal ? "педаль/дроссель пунктиром" : "",
+      showSpeed ? "скорость точками" : "",
+      rateHint,
+    ].filter(Boolean).join(" · "));
   if (accelTab === "dyno") {
     const src = selected[0]?.dynoSource;
     $("compareHint").textContent = selected.length > 1
