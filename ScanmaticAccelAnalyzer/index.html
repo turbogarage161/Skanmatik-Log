@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=18"></script>
+  <script src="sm2.js?v=19"></script>
 </head>
 <body>
   <div class="app">
@@ -137,7 +137,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Обороты — окно-гистерезис: разгон должен пройти сквозь выбранный диапазон, на графике весь набор от начала роста до конца. Педаль/дроссель — только допуск.</p>
+      <p class="hint" id="columnHint">На график идёт участок, где педаль/дроссель удерживается на максимуме (WOT). Обороты — окно-гистерезис: разгон должен пройти сквозь выбранный диапазон. Педаль/дроссель — допуск и обрезка отображения.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -146,6 +146,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=42"></script>
+  <script src="app.js?v=43"></script>
 </body>
 </html>
