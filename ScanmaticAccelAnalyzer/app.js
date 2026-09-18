@@ -578,6 +578,14 @@ function pullHasUsableSpeed(pull) {
   return n / sp.length >= 0.4;
 }
 
+/** Для расчёта: убрать застывший/педальный «VSS», не трогая ряд на обзоре. */
+function sanitizePointsSpeed(points) {
+  if (typeof sm2SanitizeSpeed !== "function" || !points?.length) return;
+  const tmp = points.map((p) => ({ t: p.t, rpm: p.rpm, pedal: p.pedal, speed: p.speed }));
+  sm2SanitizeSpeed(tmp);
+  for (let i = 0; i < points.length; i++) points[i].speed = tmp[i].speed;
+}
+
 function timeAtValue(time, values, target) {
   if (!time?.length || !values?.length || !Number.isFinite(target)) return null;
   if (Number.isFinite(values[0]) && values[0] >= target) return time[0];
@@ -691,6 +699,7 @@ function findPulls(log, opts) {
     }
     if (points.length < 3) continue;
 
+    sanitizePointsSpeed(points);
     const dyno = attachDynoIndex(points, { dtWindow: dtWin, smoothWindow: win });
     const lock = applySpeedGearLock(points, opts);
     pulls.push({
@@ -947,6 +956,7 @@ function makePullFromAll(log) {
       vehAccelLink: vehAccelLink ? vehAccelLink[k] : null,
     });
   }
+  sanitizePointsSpeed(points);
   const dyno = attachDynoIndex(points, { dtWindow: dtWin, smoothWindow: win });
   const lock = applySpeedGearLock(points, opts);
   return {
@@ -1737,6 +1747,7 @@ function renderCharts() {
         borderDash: [2, 3],
         tension: 0.12,
         fill: false,
+        spanGaps: true,
         parsing: false,
       });
     }
@@ -1804,7 +1815,9 @@ function renderCharts() {
     ? (alignedPack.useSpeed
       ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : ""}${showSpeed ? " · скорость точками" : ""}`
       : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : (showSpeed ? " · скорость точками" : " · только обороты")}`)
-    : (showPedal ? `${selected[0].name} · педаль/дроссель пунктиром` : selected[0].name);
+    : (showPedal || showSpeed
+      ? `${selected[0].name} · ${[showPedal ? "педаль/дроссель пунктиром" : "", showSpeed ? "скорость точками" : ""].filter(Boolean).join(" · ")}`
+      : selected[0].name);
   if (accelTab === "dyno") {
     const src = selected[0]?.dynoSource;
     $("compareHint").textContent = selected.length > 1

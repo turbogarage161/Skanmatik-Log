@@ -932,7 +932,8 @@ function sm2SessionToWotPulls(session, opts) {
   }));
   const pulls = sm2FindAllWotPulls(samples, opts);
   if (!pulls.length) return [];
-  for (const pull of pulls) sm2SanitizeSpeed(pull.rows);
+  // Обзор показывает канал скорости как в логе. Подделку VSS (застывшие ~86%)
+  // отсекает sm2SanitizeSpeed только в точках расчёта (замок передачи / dyno).
 
   const keepSpeed = session.headers.length >= 4
     || session.meta?.hasSpeed
