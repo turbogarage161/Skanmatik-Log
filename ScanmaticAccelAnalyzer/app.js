@@ -667,7 +667,7 @@ function findPulls(log, opts) {
   for (const seg of segs) {
     const a = Number.isInteger(seg.a) ? seg.a : 0;
     const b = Number.isInteger(seg.b) ? seg.b : time.length - 1;
-    if (b - a < 3) continue;
+    if (b - a < 2) continue;
     const r0 = rpm[a];
     const r1 = rpm[b];
     const points = [];
@@ -675,9 +675,9 @@ function findPulls(log, opts) {
       const prevRpm = k > a ? rpm[k - 1] : rpm[k];
       const dip = (typeof SM2_OBD_DIP === "number") ? SM2_OBD_DIP : 80;
       if (k > a && rpm[k] + dip < prevRpm) continue;
+      if (!Number.isFinite(rpm[k])) continue;
       const aClassic = rpmAccelClassic[k];
       const aLink = rpmAccelLink[k];
-      if (!Number.isFinite(aClassic) && !Number.isFinite(aLink)) continue;
       points.push({
         t: time[k] - time[a],
         rpm: rpm[k],
@@ -689,7 +689,7 @@ function findPulls(log, opts) {
         vehAccelLink: vehAccelLink ? vehAccelLink[k] : null,
       });
     }
-    if (points.length < 4) continue;
+    if (points.length < 3) continue;
 
     const dyno = attachDynoIndex(points, { dtWindow: dtWin, smoothWindow: win });
     const lock = applySpeedGearLock(points, opts);
@@ -935,7 +935,7 @@ function makePullFromAll(log) {
   const points = [];
   for (let k = 0; k < time.length; k++) {
     if (k > 0 && rpm[k] + ((typeof SM2_OBD_DIP === "number") ? SM2_OBD_DIP : 80) < rpm[k - 1]) continue;
-    if (!Number.isFinite(rpmAccel[k]) && !Number.isFinite(rpmAccelLink[k])) continue;
+    if (!Number.isFinite(rpm[k])) continue;
     points.push({
       t: time[k] - time[0],
       rpm: rpm[k],
@@ -1948,7 +1948,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "На график идёт участок, где педаль/дроссель удерживается на максимуме (WOT). Обороты — окно-гистерезис. Педаль/дроссель — допуск и обрезка отображения.";
+  $("columnHint").textContent = "Ищутся все разгоны на одной передаче: вспышка записи → высокая педаль/дроссель → рост оборотов. Обороты — окно-гистерезис.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {
