@@ -899,7 +899,7 @@ async function addFiles(fileList) {
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
-          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. Нужна полка WOT выше порога и набор ≥ Δ (от 4000 об/мин).`);
+          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. Нужна Δ ≥ ползунка (от 4000 об/мин) и на всей Δ педаль/дроссель в WOT.`);
         }
         continue;
       }
@@ -933,7 +933,7 @@ async function addFiles(fileList) {
       };
       log.pulls = findPulls(log, opts);
       if (!log.pulls.length) {
-        alert(`В «${file.name}» нет WOT-разгона (полка педали/дросселя и набор ≥ Δ от 4000 об/мин).`);
+        alert(`В «${file.name}» нет WOT-разгона (на всей Δ педаль/дроссель в WOT, набор ≥ Δ от 4000 об/мин).`);
       }
       logs.push(log);
     } catch (e) {
@@ -1054,7 +1054,7 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = (logs.length || sm2Sources.length)
-      ? "Разгоны не найдены. Нужна неподвижная полка педали/дросселя выше «WOT от» и набор не меньше Δ (от 4000 об/мин)."
+      ? "Разгоны не найдены. Нужна Δ оборотов ≥ ползунка (от 4000) и на всей Δ педаль/дроссель в WOT и статичны (шум до 2%)."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
@@ -1145,7 +1145,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
-    `. Авто-WOT: педаль/дроссель неподвижны и ≥ ${optsFromUi().wotFloor}%, набор ≥ ${optsFromUi().minRpmGain} об/мин` +
+    `. Разгон: на всей Δ педаль/дроссель в WOT ≥ ${optsFromUi().wotFloor}% и статичны (шум до 2%), набор ≥ ${optsFromUi().minRpmGain} об/мин` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -2128,7 +2128,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Авто-WOT: педаль/дроссель не меняется и выше порога, обороты растут минимум на выбранную Δ.";
+  $("columnHint").textContent = "Разгон: набор ≥ Δ оборотов (ползунок, не меньше 4000). На всей Δ педаль/дроссель в WOT порога «WOT от».";
 }
 
 $("fileInput").addEventListener("change", async (e) => {
@@ -2160,8 +2160,17 @@ function bindSlider(id, labelId, fmt) {
   const el = $(id);
   const lab = $(labelId);
   if (!el) return;
+  const floor = Number(el.min);
   const sync = () => {
-    if (lab) lab.textContent = fmt(Number(el.value));
+    let n = Number(el.value);
+    if (id === "minRpmGain" && (!Number.isFinite(n) || n < 4000)) {
+      n = 4000;
+      el.value = "4000";
+    } else if (Number.isFinite(floor) && Number.isFinite(n) && n < floor) {
+      n = floor;
+      el.value = String(floor);
+    }
+    if (lab) lab.textContent = fmt(n);
   };
   el.addEventListener("input", () => {
     sync();

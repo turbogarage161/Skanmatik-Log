@@ -826,6 +826,16 @@ function sm2MaybeCropDisplay(rows, a, b, pedalMinReq, pedalMax) {
   return { a, b };
 }
 
+/** На всём участке педаль/дроссель ≥ порога WOT (каждый кадр набора Δ). */
+function sm2WotThroughout(rows, a, b, wotFloor) {
+  if (b - a < 2) return false;
+  for (let i = a; i <= b; i++) {
+    const p = rows[i].pedal;
+    if (!sm2Ok(p) || p < wotFloor - 0.25) return false;
+  }
+  return true;
+}
+
 /** Свести кусок к полке, где педаль уже не едет к WOT и ещё не отпущена. */
 function sm2SettleToHoldLevel(rows, a, b) {
   const ped = sm2SegPedalStats(rows, a, b);
@@ -910,9 +920,8 @@ function sm2StationaryWotRuns(rows, from, to, wotFloor, holdStep = SM2_WOT_STEP,
 }
 
 /**
- * Разгоны для выбора: авто-WOT = педаль/дроссель не двигается и выше одного порога,
- * обороты растут на той же полке минимум на Δ (ползунок, по умолчанию 4000).
- * Окно оборотов 1000–8000 больше не режет график и не подменяет условие набора.
+ * Разгоны для выбора: Δ оборотов (ползунок, не меньше 4000) + на всей этой Δ
+ * педаль/дроссель в WOT предыдущего фильтра и статичны (шум до 2%).
  */
 function sm2FindAllWotPulls(rows, opts = {}) {
   if (!rows || rows.length < 4) return [];
@@ -945,6 +954,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     if (dur0 > maxDur) return;
     if (!sm2MeetsMinDur(dur0, minDur, medDt, n0) && !(gain0 >= minRpmGain && n0 >= 8 && dur0 >= 1.2)) return;
     if (hasPedal) {
+      if (!sm2WotThroughout(rows, a, b, wotFloor)) return;
       const ped = sm2SegPedalStats(rows, a, b);
       if (!ped || ped.max < wotFloor - 0.25) return;
       if (ped.max - ped.min > SM2_WOT_HOLD_SPAN + 0.05) return;
