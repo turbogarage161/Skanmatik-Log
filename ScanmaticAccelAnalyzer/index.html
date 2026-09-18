@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css?v=6" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=32"></script>
+  <script src="sm2.js?v=33"></script>
 </head>
 <body>
   <div class="app">
@@ -131,7 +131,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Окно оборотов — начало и конец. ПК: полка WOT (шум 2%). Телефон Scanmatik: короткие пачки ~3–4 с и рампа дросселя тоже ищутся. На графике — весь найденный набор.</p>
+      <p class="hint" id="columnHint">Обороты — любое начало и конец, без минимальной дельты. В этом диапазоне педаль в WOT; на графике — весь непрерывный набор, а не ширина ползунков.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -140,6 +140,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=63"></script>
+  <script src="app.js?v=64"></script>
 </body>
 </html>

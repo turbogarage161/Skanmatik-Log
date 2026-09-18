@@ -562,19 +562,15 @@ function sm2RpmWindowSlice(rows, a, b, lo, hi) {
 }
 
 /**
- * Ползунки оборотов: участок должен реально зайти в окно [lo, hi],
- * не «зацепить» его на 50 об/мин.
+ * Ползунки оборотов: участок должен пересечь окно [lo, hi].
+ * Ширина окна любая (без минимальной дельты 4000).
  */
 function sm2PassesRpmWindow(rpm0, rpm1, lo = 1000, hi = 8000) {
   if (!Number.isFinite(rpm0) || !Number.isFinite(rpm1) || !(hi > lo)) return false;
   const a = Math.min(rpm0, rpm1);
   const b = Math.max(rpm0, rpm1);
   const overlap = Math.min(b, hi) - Math.max(a, lo);
-  if (!(overlap > 0)) return false;
-  const span = b - a;
-  const win = hi - lo;
-  const need = Math.min(span, Math.max(350, Math.min(900, win * 0.18)));
-  return overlap >= need - 1;
+  return overlap > 0;
 }
 
 /** Оставить кадры участка, чьи обороты попадают в окно фильтра. */
@@ -1008,7 +1004,6 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   if (!(rpmMax > rpmMin)) {
     const t = rpmMin; rpmMin = rpmMax; rpmMax = t;
   }
-  if (rpmMax - rpmMin < 4000) rpmMax = rpmMin + 4000;
   const gapSec = opts.gapSec ?? SM2_GAP_SEC;
   const maxDur = opts.maxDuration ?? 22;
   const minRps = opts.minRps ?? 20;
@@ -1036,13 +1031,13 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     }
     if (!sm2PassesRpmWindow(rpm0, rpm1, rpmMin, rpmMax)) return;
     const win = sm2RpmWindowSlice(rows, a, b, rpmMin, rpmMax);
-    if (!win) return;
+    const gate = (win && win.b - win.a >= 2) ? win : { a, b };
     if (hasPedal) {
       if (kind === "hold") {
-        if (!sm2WotStaticThroughout(rows, win.a, win.b, wotFloor)) return;
+        if (!sm2WotStaticThroughout(rows, gate.a, gate.b, wotFloor)) return;
         if (!sm2WotStaticThroughout(rows, a, b, wotFloor)) return;
       } else {
-        if (!sm2RampPedalOk(rows, win.a, win.b, rampFloor)) return;
+        if (!sm2RampPedalOk(rows, gate.a, gate.b, rampFloor)) return;
         if (!sm2RampPedalOk(rows, a, b, rampFloor)) return;
       }
     } else if (!sm2NoPedalAdmitsPull(rows, a, b, { gain: gain0, rps: rps0, n: n0, rpm0, rpm1 })) {

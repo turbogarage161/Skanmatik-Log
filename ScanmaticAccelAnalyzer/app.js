@@ -1144,7 +1144,7 @@ function renderColumnMap() {
       : "") +
     `Колонки: время=«${log.headers[log.timeCol]}», обороты=«${log.headers[log.rpmCol]}», педаль/дроссель=«${log.headers[log.pedalCol]}»` +
     (log.speedCol >= 0 ? `, скорость=«${log.headers[log.speedCol]}» (подхвачена автоматически)` : ", скорость не найдена") +
-    `. Окно ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин, WOT ≥ ${optsFromUi().wotFloor}% (ПК — полка ±2%; телефон — рампа, если PID не доходит до ползунка — по максимуму лога). Показ — весь набор.` +
+    `. Окно ${optsFromUi().rpmMin}–${optsFromUi().rpmMax} об/мин (любая ширина). WOT ≥ ${optsFromUi().wotFloor}%. Показ — весь непрерывный набор, не ширина ползунков.` +
     (optsFromUi().speedLock
       ? ". Уточнение по скорости: вкл. (жёсткая передача). На АКПП снимите галочку."
       : ". Уточнение по скорости выкл.");
@@ -2127,7 +2127,7 @@ function clearAll() {
   renderPullList();
   renderCharts();
   renderStats();
-  $("columnHint").textContent = "Окно оборотов — начало и конец. ПК: полка WOT. Телефон: рампа дросселя в короткой пачке тоже ищется. На графике — весь набор.";
+  $("columnHint").textContent = "Обороты — любое начало и конец, без минимальной дельты. В диапазоне педаль в WOT; на графике — весь непрерывный набор.";
 }
 
 $("fileInput").addEventListener("change", async (e) => {
@@ -2233,7 +2233,7 @@ function bindDualRange(minId, maxId, fillId, labelId, fmt, minGap) {
   sync();
 }
 
-bindDualRange("rpmMin", "rpmMax", "rpmFill", "rpmRangeLabel", (a, b) => `${Math.round(a)}–${Math.round(b)}`, 4000);
+bindDualRange("rpmMin", "rpmMax", "rpmFill", "rpmRangeLabel", (a, b) => `${Math.round(a)}–${Math.round(b)}`, 100);
 bindSlider("wotFloor", "wotFloorLabel", (n) => `${Math.round(n)}%`);
 bindSlider("minDuration", "minDurationLabel", (n) => `${n.toFixed(1)} с`);
 bindSlider("smoothWindow", "smoothWindowLabel", (n) => String(Math.round(n)));
