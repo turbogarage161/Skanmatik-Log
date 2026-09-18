@@ -899,7 +899,7 @@ async function addFiles(fileList) {
           added += addWotsFromSession(session, file.name, opts);
         }
         if (!added) {
-          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. Сдвиньте ползунки оборотов/педали или уменьшите мин. длительность.`);
+          alert(`В «${file.name}» нет участков разгона в выбранном фильтре. Нужна полка WOT выше порога и набор ≥ Δ (от 4000 об/мин).`);
         }
         continue;
       }
@@ -933,7 +933,7 @@ async function addFiles(fileList) {
       };
       log.pulls = findPulls(log, opts);
       if (!log.pulls.length) {
-        alert(`В «${file.name}» нет WOT-разгона.`);
+        alert(`В «${file.name}» нет WOT-разгона (полка педали/дросселя и набор ≥ Δ от 4000 об/мин).`);
       }
       logs.push(log);
     } catch (e) {
@@ -1054,7 +1054,7 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = (logs.length || sm2Sources.length)
-      ? "Разгоны не найдены. Сдвиньте ползунки оборотов и педали/дросселя или уменьшите мин. длительность."
+      ? "Разгоны не найдены. Нужна неподвижная полка педали/дросселя выше «WOT от» и набор не меньше Δ (от 4000 об/мин)."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
