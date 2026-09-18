@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Skanmatik Log — просмотр логов</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="logo">SM2<span>Log</span></div>
+    <div class="topbar-sub">Skanmatik-Log · просмотр и фильтрация</div>
+    <div class="topbar-actions">
+      <label class="btn file-btn">
+        Открыть лог (.csv)
+        <input type="file" id="fileInput" accept=".csv,.txt,.tsv,.log" hidden />
+      </label>
+      <button class="btn ghost" id="demoBtn" type="button">Демо-лог</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="panel filters">
+    <div class="panel-title">Фильтры</div>
+
+    <div class="file-info" id="fileInfo">Лог не загружен</div>
+    <div class="detected" id="detectedInfo"></div>
+
+    <!-- Обороты: двойной компактный ползунок 1000–8000 + ручные поля -->
+    <section class="filter-block" id="rpmBlock">
+      <div class="filter-head">
+        <label class="check">
+          <input type="checkbox" id="rpmEnabled" checked />
+          <span>Обороты, об/мин</span>
+        </label>
+        <span class="range-label" id="rpmLabel">1000 – 8000</span>
+      </div>
+
+      <div class="dual compact" id="rpmDual">
+        <div class="dual-track"></div>
+        <div class="dual-fill" id="rpmFill"></div>
+        <input type="range" id="rpmMin" min="1000" max="8000" step="50" value="1000" />
+        <input type="range" id="rpmMax" min="1000" max="8000" step="50" value="8000" />
+      </div>
+
+      <div class="manual-row">
+        <label>от <input type="number" id="rpmMinNum" min="1000" max="8000" step="50" value="1000" /></label>
+        <span class="dash">–</span>
+        <label>до <input type="number" id="rpmMaxNum" min="1000" max="8000" step="50" value="8000" /></label>
+        <button class="btn tiny" id="rpmReset" type="button" title="Сбросить 1000–8000">Сброс</button>
+      </div>
+      <div class="hint">Два ползунка: левый — минимум, правый — максимум.</div>
+    </section>
+
+    <!-- Педаль / Дроссель: один двойной компактный ползунок 0–100, без полей ввода -->
+    <section class="filter-block" id="thrBlock">
+      <div class="filter-head">
+        <label class="check">
+          <input type="checkbox" id="thrEnabled" checked />
+          <span id="thrTitle">Дроссель, %</span>
+        </label>
+        <span class="range-label" id="thrLabel">0 – 100</span>
+      </div>
+
+      <div class="thr-source" id="thrSourceRow" hidden>
+        <span>Источник:</span>
+        <div class="seg" id="thrSeg">
+          <button type="button" data-src="pedal" class="active">Педаль</button>
+          <button type="button" data-src="throttle">Дроссель</button>
+        </div>
+      </div>
+
+      <div class="dual compact" id="thrDual">
+        <div class="dual-track"></div>
+        <div class="dual-fill" id="thrFill"></div>
+        <input type="range" id="thrMin" min="0" max="100" step="1" value="0" />
+        <input type="range" id="thrMax" min="0" max="100" step="1" value="100" />
+      </div>
+
+      <div class="hint" id="thrHint">Ползунок по колонке из лога.</div>
+      <button class="btn tiny ghost-btn" id="thrReset" type="button">Сбросить 0–100</button>
+    </section>
+
+    <section class="filter-block stats">
+      <div class="stat-row"><span>Всего строк:</span><b id="statTotal">0</b></div>
+      <div class="stat-row"><span>После фильтров:</span><b id="statFiltered">0</b></div>
+      <div class="stat-row"><span>Отсеяно:</span><b id="statCut">0</b></div>
+      <button class="btn tiny" id="resetAll" type="button">Сбросить все фильтры</button>
+    </section>
+  </aside>
+
+  <section class="panel content">
+    <div class="tabs">
+      <button class="tab active" data-tab="chart" type="button">График</button>
+      <button class="tab" data-tab="table" type="button">Таблица</button>
+    </div>
+    <div class="tab-body" id="tab-chart">
+      <canvas id="chart" height="260"></canvas>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="tab-body hidden" id="tab-table">
+      <div class="table-wrap">
+        <table id="grid">
+          <thead><tr id="gridHead"></tr></thead>
+          <tbody id="gridBody"></tbody>
+        </table>
+      </div>
+      <div class="table-foot" id="tableFoot"></div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
