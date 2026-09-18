@@ -1366,8 +1366,8 @@ function buildAccelDatasets(selected, opts, mode) {
         borderColor: pull.color,
         backgroundColor: pull.color,
         pointRadius: 0,
-        borderWidth: 2,
-        tension: 0.25,
+        borderWidth: 1.35,
+        tension: 0.22,
         spanGaps: false,
         order: 1,
       };
@@ -1400,8 +1400,8 @@ function buildAccelDatasets(selected, opts, mode) {
       borderColor: pull.color,
       backgroundColor: pull.color,
       pointRadius: 0,
-      borderWidth: 3,
-      tension: 0.3,
+      borderWidth: 1.5,
+      tension: 0.28,
       spanGaps: false,
       order: 1,
     });
@@ -1451,8 +1451,8 @@ function makeAccelChart(canvas, datasets, opts, mode) {
           position: "bottom",
           labels: {
             color: "#e8edf4",
-            boxWidth: 14,
-            boxHeight: 3,
+            boxWidth: 12,
+            boxHeight: 2,
             padding: 10,
             font: { size: 11 },
           },
@@ -1562,8 +1562,8 @@ function buildDynoDatasets(selected) {
     borderColor: pull.color,
     backgroundColor: pull.color,
     pointRadius: 0,
-    borderWidth: 2.75,
-    tension: 0.25,
+    borderWidth: 1.5,
+    tension: 0.22,
     spanGaps: false,
     order: i + 1,
   }));
@@ -1618,8 +1618,8 @@ function makeDynoChart(canvas, pack) {
           position: "bottom",
           labels: {
             color: "#e8edf4",
-            boxWidth: 14,
-            boxHeight: 3,
+            boxWidth: 12,
+            boxHeight: 2,
             padding: 10,
             font: { size: 11 },
           },
@@ -1692,10 +1692,11 @@ function renderCharts() {
   const aligned = alignedPack.series || [];
   const overDatasets = [];
   const showSpeed = aligned.some((s) => s.spdPts?.some((p) => Number.isFinite(p.y) && p.y > 0));
-  const showPedal = !showSpeed && selected.length <= 2;
+  const showPedal = aligned.some((s) => s.pedPts?.some((p) => Number.isFinite(p.y)));
   const spdMax = showSpeed
     ? Math.max(80, ...aligned.flatMap((s) => s.spdPts.map((p) => p.y).filter(Number.isFinite)))
     : 110;
+  const y1Max = showSpeed ? Math.max(showPedal ? 110 : 0, Math.ceil(spdMax / 10) * 10) : 110;
   for (const { pull, rpmPts, pedPts, spdPts } of aligned) {
     overDatasets.push({
       label: pull.name,
@@ -1704,31 +1705,38 @@ function renderCharts() {
       borderColor: pull.color,
       backgroundColor: pull.color,
       pointRadius: 0,
-      borderWidth: 2.5,
+      borderWidth: 1.4,
+      tension: 0.15,
+      fill: false,
       parsing: false,
     });
+    if (showPedal && pedPts?.length) {
+      overDatasets.push({
+        label: `${pull.name} · педаль/дроссель`,
+        data: pedPts,
+        yAxisID: "y1",
+        borderColor: pull.color,
+        backgroundColor: "transparent",
+        pointRadius: 0,
+        borderWidth: 1.2,
+        borderDash: [7, 4],
+        tension: 0.12,
+        fill: false,
+        parsing: false,
+      });
+    }
     if (showSpeed && spdPts?.length) {
       overDatasets.push({
         label: `${pull.name} · км/ч`,
         data: spdPts,
         yAxisID: "y1",
         borderColor: pull.color,
-        backgroundColor: pull.color,
+        backgroundColor: "transparent",
         pointRadius: 0,
-        borderWidth: 1.6,
-        borderDash: [4, 3],
-        parsing: false,
-      });
-    } else if (showPedal) {
-      overDatasets.push({
-        label: `${pull.name} · педаль`,
-        data: pedPts,
-        yAxisID: "y1",
-        borderColor: pull.color,
-        backgroundColor: pull.color,
-        pointRadius: 0,
-        borderWidth: 1.5,
-        borderDash: [5, 3],
+        borderWidth: 1.1,
+        borderDash: [2, 3],
+        tension: 0.12,
+        fill: false,
         parsing: false,
       });
     }
@@ -1763,10 +1771,12 @@ function renderCharts() {
           position: "right",
           display: showPedal || showSpeed,
           min: 0,
-          max: showSpeed ? Math.ceil(spdMax / 10) * 10 : 110,
+          max: y1Max,
           title: {
             display: showPedal || showSpeed,
-            text: showSpeed ? "скорость, км/ч" : "педаль %",
+            text: showSpeed && showPedal
+              ? "педаль % · км/ч"
+              : (showSpeed ? "скорость, км/ч" : "педаль / дроссель %"),
             color: "#9aa6b5",
           },
           ticks: { color: "#9aa6b5" },
@@ -1778,8 +1788,8 @@ function renderCharts() {
           position: "bottom",
           labels: {
             color: "#e8edf4",
-            boxWidth: 14,
-            boxHeight: 3,
+            boxWidth: 12,
+            boxHeight: 2,
             padding: 10,
             font: { size: 11 },
           },
@@ -1792,9 +1802,9 @@ function renderCharts() {
   const lockSlip = selected.some((p) => p.speedLock?.usable && p.speedLock?.cv > 0.12);
   $("overviewHint").textContent = selected.length > 1
     ? (alignedPack.useSpeed
-      ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showSpeed ? " · скорость пунктиром" : ""}`
-      : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? "" : (showSpeed ? " · скорость пунктиром" : " · только обороты")}`)
-    : selected[0].name;
+      ? `Совмещено по ${Math.round(alignedPack.refSpeed)} км/ч · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : ""}${showSpeed ? " · скорость точками" : ""}`
+      : `Совмещено по ${Math.round(refRpm)} об/мин · ${aligned.length} прог.${showPedal ? " · педаль/дроссель пунктиром" : (showSpeed ? " · скорость точками" : " · только обороты")}`)
+    : (showPedal ? `${selected[0].name} · педаль/дроссель пунктиром` : selected[0].name);
   if (accelTab === "dyno") {
     const src = selected[0]?.dynoSource;
     $("compareHint").textContent = selected.length > 1
