@@ -949,14 +949,8 @@ async function addFiles(fileList) {
 }
 
 function selectDefaultPulls() {
-  const countByFile = new Map();
   for (const log of logs) {
-    const key = log.rawName || log.id;
-    for (const p of log.pulls) {
-      const n = countByFile.get(key) || 0;
-      p.selected = n < 3;
-      countByFile.set(key, n + 1);
-    }
+    for (const p of log.pulls) p.selected = true;
   }
 }
 
@@ -1030,7 +1024,7 @@ function reanalyzeAll() {
   for (const item of sm2Sources) addWotsFromSession(item.session, item.fileName, opts);
   for (const log of csvLogs) {
     log.pulls = findPulls(log, opts);
-    log.pulls.forEach((p, i) => { p.selected = i < 3; });
+    log.pulls.forEach((p) => { p.selected = true; });
     logs.push(log);
   }
   selectDefaultPulls();
