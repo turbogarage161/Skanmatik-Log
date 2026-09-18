@@ -6,7 +6,7 @@
   <title>Анализатор разгонов — Scanmatic SM2</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-  <script src="sm2.js?v=10"></script>
+  <script src="sm2.js?v=11"></script>
 </head>
 <body>
   <div class="app">
@@ -80,14 +80,28 @@
     <section class="panel settings">
       <h2>Детекция полного газа (педаль / дроссель OBD-II)</h2>
       <div class="grid">
-        <label>
-          Полный газ ≥ % (если меньше макс. в логе — берётся ~88% от макс.)
-          <input type="number" id="fullPedal" value="80" min="50" max="100" step="1" />
-        </label>
-        <label>
-          Отпущена ≤ %
-          <input type="number" id="releasePedal" value="40" min="0" max="70" step="1" />
-        </label>
+        <div class="range-filter">
+          <div class="range-filter-head">
+            <span id="rpmRangeTitle">Обороты, об/мин</span>
+            <strong id="rpmRangeLabel">2500–5000</strong>
+          </div>
+          <div class="dual-range">
+            <div class="dual-track"><div class="dual-fill"></div></div>
+            <input type="range" id="rpmBandLo" min="1000" max="8000" step="100" value="2500" />
+            <input type="range" id="rpmBandHi" min="1000" max="8000" step="100" value="5000" />
+          </div>
+        </div>
+        <div class="range-filter">
+          <div class="range-filter-head">
+            <span id="pedalRangeTitle">Педаль/дроссель, %</span>
+            <strong id="pedalRangeLabel">≤40 · ≥80</strong>
+          </div>
+          <div class="dual-range">
+            <div class="dual-track"><div class="dual-fill"></div></div>
+            <input type="range" id="releasePedal" min="0" max="100" step="1" value="40" />
+            <input type="range" id="fullPedal" min="0" max="100" step="1" value="80" />
+          </div>
+        </div>
         <label>
           Мин. длительность разгона, с
           <input type="number" id="minDuration" value="3" min="0.5" max="30" step="0.1" />
@@ -112,7 +126,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-      <p class="hint" id="columnHint">Выборка: педаль/дроссель в пол + рост оборотов; доп. фильтр — прогон накрывает 2500→5000 об/мин, ≥3 с.</p>
+      <p class="hint" id="columnHint">Ползунок оборотов: разгон должен накрыть выбранный диапазон. Ползунок %: левый — «отпущена ≤», правый — «в пол ≥».</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -121,6 +135,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>

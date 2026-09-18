@@ -382,8 +382,14 @@ function sm2FindAllWotPulls(rows, opts = {}) {
   const maxPedal = Math.max(...pedals);
   const floor = opts.fullFloor ?? 70;
   const ratio = opts.fullRatio ?? 0.88;
-  const fullThr = Math.max(floor, maxPedal * Math.min(ratio, 0.85));
-  const releaseThr = Math.min(fullThr * 0.55, opts.releasePedal ?? 40);
+  // Ручной порог с ползунка приоритетнее адаптивного
+  const manualFull = Number.isFinite(opts.fullPedal);
+  const fullThr = manualFull
+    ? opts.fullPedal
+    : Math.max(floor, maxPedal * Math.min(ratio, 0.85));
+  const releaseThr = Number.isFinite(opts.releasePedal)
+    ? Math.min(opts.releasePedal, fullThr)
+    : Math.min(fullThr * 0.55, 40);
   const minDur = opts.minDuration ?? 3;
   const minRpmGain = opts.minRpmGain ?? 250;
   const bandLo = opts.rpmBandLo ?? 2500;
@@ -430,7 +436,7 @@ function sm2FindAllWotPulls(rows, opts = {}) {
     }
   }
 
-  if (!candidates.length) {
+  if (!candidates.length && !manualFull) {
     const sorted = [...pedals].sort((a, b) => a - b);
     const hi = sorted[Math.floor(sorted.length * 0.75)];
     const thr2 = Math.max(floor * 0.9, hi * 0.92);

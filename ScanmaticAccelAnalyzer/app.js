@@ -519,11 +519,9 @@ function findPulls(log, opts) {
   const bandLo = opts.rpmBandLo ?? 2500;
   const bandHi = opts.rpmBandHi ?? 5000;
 
-  // Адаптивный «полный газ» по этому логу
-  const finitePedal = pedal.filter((v) => Number.isFinite(v));
-  const maxPedal = finitePedal.length ? Math.max(...finitePedal) : 100;
-  const adaptiveFull = Math.max(Math.min(full, 70), maxPedal * 0.85);
-  const adaptiveRelease = Math.min(release, adaptiveFull * 0.55);
+  // Ручные пороги с ползунка: правый — «в пол ≥», левый — «отпущена ≤»
+  const fullThr = Number.isFinite(full) ? full : 80;
+  const releaseThr = Math.min(Number.isFinite(release) ? release : 40, fullThr);
 
   // На исходных сэмплах (как в ECU/Link) — без апсемплинга
   const rpmAccelClassic = computeAccelSeries(time, rpm, { dtWindow: dtWin, smoothWindow: win }, "classic");
@@ -610,10 +608,10 @@ function findPulls(log, opts) {
 
   let i = 0;
   while (i < pedal.length) {
-    while (i < pedal.length && !(pedal[i] >= adaptiveFull)) i++;
+    while (i < pedal.length && !(pedal[i] >= fullThr)) i++;
     if (i >= pedal.length) break;
     const start = i;
-    while (i < pedal.length && pedal[i] > adaptiveRelease) i++;
+    while (i < pedal.length && pedal[i] > releaseThr) i++;
     const end = i - 1;
     if (end <= start) continue;
 
@@ -701,6 +699,8 @@ function optsFromUi() {
   return {
     fullPedal: Number($("fullPedal").value),
     releasePedal: Number($("releasePedal").value),
+    rpmBandLo: Number($("rpmBandLo")?.value) || 2500,
+    rpmBandHi: Number($("rpmBandHi")?.value) || 5000,
     minDuration: Number($("minDuration").value),
     dtWindow: Number($("dtWindow")?.value) || 0.2,
     smoothWindow: Number($("smoothWindow")?.value) || 5,
@@ -726,13 +726,12 @@ async function addFiles(fileList) {
         let added = 0;
         for (const session of parsed.sessions) {
           const wots = sm2SessionToWotPulls(session, {
-            fullFloor: Math.min(opts.fullPedal, 70),
-            fullRatio: 0.85,
+            fullPedal: opts.fullPedal,
             releasePedal: opts.releasePedal,
             minDuration: opts.minDuration,
             minRpmGain: 250,
-            rpmBandLo: 2500,
-            rpmBandHi: 5000,
+            rpmBandLo: opts.rpmBandLo,
+            rpmBandHi: opts.rpmBandHi,
           });
           for (const wot of wots) {
             /** @type {LogFile} */
@@ -760,7 +759,7 @@ async function addFiles(fileList) {
           }
         }
         if (!added) {
-          alert(`В «${file.name}» нет WOT с ростом оборотов, покрывающим 2500→5000 (≥ ${opts.minDuration} с).`);
+          alert(`В «${file.name}» нет WOT с ростом оборотов, покрывающим ${opts.rpmBandLo}→${opts.rpmBandHi} (≥ ${opts.minDuration} с).`);
         }
         continue;
       }
@@ -890,7 +889,7 @@ function renderPullList() {
   if (!pulls.length) {
     box.className = "pull-list empty";
       box.textContent = logs.length
-      ? "Разгоны не найдены. Уменьшите порог «Полный газ» или мин. длительность."
+      ? "Разгоны не найдены. Расширьте ползунки оборотов/газа или уменьшите мин. длительность."
       : "Загрузите .sm2 (OBD-II) — все прогоны подгрузятся сразу.";
     $("exportBtn").disabled = true;
     $("pngBtn").disabled = true;
@@ -938,9 +937,25 @@ function fmtSec(n) {
   return `${n.toFixed(2)} с`;
 }
 
+/** Подпись ползунка газа: «Педаль» или «Дроссель» — по колонке из лога. */
+function updatePedalRangeTitle() {
+  const el = $("pedalRangeTitle");
+  if (!el) return;
+  let title = "Педаль/дроссель, %";
+  for (let i = logs.length - 1; i >= 0; i--) {
+    const log = logs[i];
+    const h = norm(log.headers?.[log.pedalCol] ?? "");
+    if (!h) continue;
+    if (THROTTLE_KEYS.some((k) => h.includes(k))) { title = "Дроссель, %"; break; }
+    if (PEDAL_KEYS.some((k) => h.includes(k))) { title = "Педаль, %"; break; }
+  }
+  el.textContent = title;
+}
+
 function renderColumnMap() {
   const panel = $("columnMapPanel");
   const map = $("columnMap");
+  updatePedalRangeTitle();
   if (!logs.length) { panel.hidden = true; return; }
   panel.hidden = false;
   const log = logs[logs.length - 1];
@@ -1784,10 +1799,51 @@ $("clearBtn").addEventListener("click", clearAll);
 $("exportBtn").addEventListener("click", exportSelectedCsv);
 $("pngBtn").addEventListener("click", savePng);
 $("metric").addEventListener("change", () => { renderCharts(); });
-["fullPedal", "releasePedal", "minDuration", "dtWindow", "smoothWindow"].forEach((id) => {
+["minDuration", "dtWindow", "smoothWindow"].forEach((id) => {
   const el = $(id);
   if (el) el.addEventListener("change", () => { if (logs.length) reanalyzeAll(); });
 });
+
+/** Двухсторонний ползунок: два input[type=range] друг на друге + заливка. */
+function setupDualRange(loId, hiId, labelId, fmtLabel) {
+  const lo = $(loId);
+  const hi = $(hiId);
+  if (!lo || !hi) return;
+  const label = $(labelId);
+  const fill = lo.closest(".dual-range")?.querySelector(".dual-fill");
+  const min = Number(lo.min);
+  const max = Number(lo.max);
+  const sync = () => {
+    const a = Number(lo.value);
+    const b = Number(hi.value);
+    if (fill) {
+      const p1 = ((a - min) / (max - min)) * 100;
+      const p2 = ((b - min) / (max - min)) * 100;
+      fill.style.left = `${p1}%`;
+      fill.style.width = `${Math.max(0, p2 - p1)}%`;
+    }
+    // если оба схлопнулись у правого края — нижний поверх, чтобы его можно было утащить
+    const overlapped = (b - a) <= (max - min) * 0.03;
+    lo.style.zIndex = overlapped && b > (min + max) / 2 ? "5" : "3";
+    hi.style.zIndex = "4";
+    if (label) label.textContent = fmtLabel(a, b);
+  };
+  lo.addEventListener("input", () => {
+    if (Number(lo.value) > Number(hi.value)) lo.value = hi.value;
+    sync();
+  });
+  hi.addEventListener("input", () => {
+    if (Number(hi.value) < Number(lo.value)) hi.value = lo.value;
+    sync();
+  });
+  const rerun = () => { if (logs.length) reanalyzeAll(); };
+  lo.addEventListener("change", rerun);
+  hi.addEventListener("change", rerun);
+  sync();
+}
+
+setupDualRange("rpmBandLo", "rpmBandHi", "rpmRangeLabel", (a, b) => `${a}–${b}`);
+setupDualRange("releasePedal", "fullPedal", "pedalRangeLabel", (a, b) => `≤${a} · ≥${b}`);
 document.querySelectorAll(".tab[data-accel-tab]").forEach((btn) => {
   btn.addEventListener("click", () => setAccelTab(btn.getAttribute("data-accel-tab")));
 });
