@@ -572,6 +572,7 @@ function applySpeedGearLock(points, opts = {}) {
 }
 
 function pullHasUsableSpeed(pull) {
+  if (pullSpeedLooksFrozen(pull)) return false;
   if (pull?.speedLock?.usable || pull?.speedLock?.applied) return true;
   const pts = pull?.points;
   if (pts?.length) {
@@ -582,6 +583,26 @@ function pullHasUsableSpeed(pull) {
   if (!sp?.length) return false;
   const n = sp.filter((s) => Number.isFinite(s) && s > 8).length;
   return n / sp.length >= 0.4;
+}
+
+function pullSpeedLooksFrozen(pull) {
+  if (speedArrayLooksFrozen(pull?.overview?.speed, pull)) return true;
+  if (pull?.points?.length) {
+    return speedArrayLooksFrozen(pull.points.map((p) => p.speed), pull);
+  }
+  return false;
+}
+
+function speedArrayLooksFrozen(src, pull) {
+  const sp = (src || []).filter((s) => Number.isFinite(s) && s > 0);
+  if (sp.length < 3) return false;
+  const span = Math.max(...sp) - Math.min(...sp);
+  const rpmSpan = Math.abs((pull.rpm1 || 0) - (pull.rpm0 || 0));
+  const mid = sp.slice().sort((a, b) => a - b)[Math.floor(sp.length / 2)];
+  const frozen = sp.filter((s) => Math.abs(s - mid) < 1.5).length / sp.length;
+  if (rpmSpan > 400 && span < 5) return true;
+  if (Math.abs(mid - (219 / 255) * 100) < 1.3 && span < 8) return true;
+  return frozen > 0.8 && span < 10 && rpmSpan > 300;
 }
 
 /** Для расчёта: убрать застывший/педальный «VSS», не трогая ряд на обзоре. */
@@ -927,10 +948,23 @@ async function addFiles(fileList) {
       alert(`Ошибка чтения «${file.name}»: ${e.message || e}`);
     }
   }
+  selectDefaultPulls();
   renderColumnMap();
   renderPullList();
   renderCharts();
   renderStats();
+}
+
+function selectDefaultPulls() {
+  const countByFile = new Map();
+  for (const log of logs) {
+    const key = log.rawName || log.id;
+    for (const p of log.pulls) {
+      const n = countByFile.get(key) || 0;
+      p.selected = n < 3;
+      countByFile.set(key, n + 1);
+    }
+  }
 }
 
 function makePullFromAll(log) {
@@ -1006,6 +1040,7 @@ function reanalyzeAll() {
     log.pulls.forEach((p, i) => { p.selected = i < 3; });
     logs.push(log);
   }
+  selectDefaultPulls();
   renderPullList();
   renderCharts();
   renderStats();
@@ -1152,8 +1187,8 @@ function rpmAxisOpts(title = "Обороты, об/мин") {
 }
 
 /** Ось оборотов (Y, обзор): авто по данным, шаг подписей 250. */
-function rpmYAxisOpts() {
-  return {
+function rpmYAxisOpts(min, max) {
+  const opts = {
     position: "left",
     grace: "6%",
     title: { display: true, text: "об/мин", color: "#9aa6b5" },
@@ -1168,6 +1203,12 @@ function rpmYAxisOpts() {
     },
     grid: { color: "#243041" },
   };
+  if (Number.isFinite(min) && Number.isFinite(max) && max > min) {
+    opts.min = min;
+    opts.max = max;
+    delete opts.grace;
+  }
+  return opts;
 }
 
 const RPM_AXIS_MIN = 2000;
@@ -1480,10 +1521,22 @@ function makeAccelChart(canvas, datasets, opts, mode) {
 }
 
 function alignRefRpm(selected) {
-  return Math.max(...selected.map((p) => {
+  const starts = selected.map((p) => {
     const r0 = p.overview?.rpm?.[0];
-    return Number.isFinite(r0) ? r0 : (Number.isFinite(p.rpm0) ? p.rpm0 : 0);
-  }));
+    return Number.isFinite(r0) ? r0 : (Number.isFinite(p.rpm0) ? p.rpm0 : NaN);
+  }).filter((v) => Number.isFinite(v));
+  const ends = selected.map((p) => {
+    const rpm = p.overview?.rpm;
+    const r1 = rpm?.length ? rpm[rpm.length - 1] : p.rpm1;
+    return Number.isFinite(r1) ? r1 : NaN;
+  }).filter((v) => Number.isFinite(v));
+  if (!starts.length) return 2000;
+  if (starts.length >= 2 && ends.length >= 2) {
+    const overlapLo = Math.max(...starts);
+    const overlapHi = Math.min(...ends);
+    if (overlapHi - overlapLo >= 80) return overlapLo;
+  }
+  return Math.min(...starts);
 }
 
 function timeAtRpm(ov, targetRpm) {
@@ -1823,7 +1876,8 @@ function renderCharts() {
         parsing: false,
       });
     }
-    if (showSpeed && spdPts?.length) {
+    const plotSpeed = showSpeed && spdPts?.length && !pullSpeedLooksFrozen(pull);
+    if (plotSpeed) {
       overDatasets.push({
         label: `${pull.name} · км/ч`,
         data: spdPts,
@@ -1839,6 +1893,17 @@ function renderCharts() {
         parsing: false,
       });
     }
+  }
+
+  const rpmYs = aligned.flatMap((s) => s.rpmPts.map((p) => p.y).filter((v) => Number.isFinite(v)));
+  let rpmYMin;
+  let rpmYMax;
+  if (rpmYs.length) {
+    const lo = Math.min(...rpmYs);
+    const hi = Math.max(...rpmYs);
+    rpmYMin = Math.max(0, Math.floor((lo - 80) / 250) * 250);
+    rpmYMax = Math.ceil((hi + 80) / 250) * 250;
+    if (rpmYMax - rpmYMin < 500) rpmYMax = rpmYMin + 500;
   }
 
   overviewChart = new Chart(overCtx, {
@@ -1866,7 +1931,7 @@ function renderCharts() {
           },
           grid: { color: "#243041" },
         },
-        y: rpmYAxisOpts(),
+        y: rpmYAxisOpts(rpmYMin, rpmYMax),
         y1: {
           position: "right",
           display: showPedal || showSpeed,
@@ -1904,7 +1969,7 @@ function renderCharts() {
   const rateHint = rates.length
     ? (rates.length === 1 || rates.every((r) => Math.abs(r.info.hz - rates[0].info.hz) / rates[0].info.hz < 0.12)
       ? `фиксация оборотов ${fmtHz(rates[0].info.hz)} Гц (шаг ${rates[0].info.dt.toFixed(2)} с)`
-      : rates.map((r) => `${fmtHz(r.info.hz)} Гц`).join(" / "))
+      : `фиксация оборотов ${fmtHz(Math.min(...rates.map((r) => r.info.hz)))}–${fmtHz(Math.max(...rates.map((r) => r.info.hz)))} Гц`)
     : "";
   $("overviewHint").textContent = selected.length > 1
     ? (alignedPack.useSpeed
