@@ -339,36 +339,106 @@ input, select {
 .best { color: var(--accent-2); font-weight: 650; }
 
 .filters-compact {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+  margin-bottom: 8px;
+}
+
+.settings-sliders {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 16px;
+  margin-bottom: 8px;
+}
+
+.slide {
   display: flex;
   flex-direction: column;
+  gap: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.slide-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 12px;
+  line-height: 1.2;
+}
+
+.slide-head strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.slide input[type="range"] {
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+.settings-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 6px;
+}
+
+.metric-mini {
+  flex: 0 1 240px;
+  min-width: 180px;
+  gap: 3px;
+  font-size: 0.78rem;
+}
+
+.metric-mini select {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+}
+
+.settings-bar .btn {
+  padding: 6px 10px;
+  font-size: 0.82rem;
+}
+
+.settings h2 {
+  margin-bottom: 8px;
 }
 
 .check-row {
   flex-direction: row !important;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
+  margin: 0;
 }
 
 .check-row input[type="checkbox"] {
-  margin-top: 3px;
-  width: 16px;
-  height: 16px;
+  margin-top: 0;
+  width: 15px;
+  height: 15px;
   accent-color: var(--accent);
   flex: 0 0 auto;
 }
 
 .check-row strong {
   color: var(--text);
-  font-size: 0.88rem;
+  font-size: 0.82rem;
 }
 
 .check-row .muted {
-  display: block;
-  font-size: 0.78rem;
-  margin-top: 2px;
+  display: inline;
+  font-size: 0.75rem;
+  margin-top: 0;
+  margin-left: 4px;
 }
 
 .dual-head {
@@ -465,4 +535,8 @@ input, select {
   .layout { grid-template-columns: 1fr; }
   .pulls { position: static; max-height: none; }
   .header { flex-direction: column; }
+  .filters-compact,
+  .settings-sliders {
+    grid-template-columns: 1fr;
+  }
 }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Анализатор разгонов — Scanmatic SM2</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=2" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <script src="sm2.js?v=21"></script>
 </head>
@@ -105,20 +105,22 @@
           </div>
         </div>
       </div>
-      <div class="grid">
-        <label>
-          Мин. длительность разгона, с
-          <input type="number" id="minDuration" value="3" min="0.5" max="30" step="0.1" />
+      <div class="settings-sliders">
+        <label class="slide">
+          <span class="slide-head">Мин. длительность <strong id="minDurationLabel">3.0 с</strong></span>
+          <input type="range" id="minDuration" min="0.5" max="30" step="0.1" value="3" />
         </label>
-        <label>
-          Сглаживание (окно) — вкладка «Ускорение · dRPM/dt»
-          <input type="number" id="smoothWindow" value="5" min="1" max="31" step="2" />
+        <label class="slide">
+          <span class="slide-head">Сглаживание <strong id="smoothWindowLabel">5</strong></span>
+          <input type="range" id="smoothWindow" min="1" max="31" step="2" value="5" />
         </label>
-        <label>
-          Окно dt Link, с — вкладка «Момент · полка Link»
-          <input type="number" id="dtWindow" value="0.2" min="0.05" max="1" step="0.05" />
+        <label class="slide">
+          <span class="slide-head">Окно dt Link <strong id="dtWindowLabel">0.20 с</strong></span>
+          <input type="range" id="dtWindow" min="0.05" max="1" step="0.05" value="0.2" />
         </label>
-        <label>
+      </div>
+      <div class="settings-bar">
+        <label class="metric-mini">
           Метрика
           <select id="metric">
             <option value="rpm_accel">dRPM/dt (об/мин/с)</option>
@@ -129,7 +131,7 @@
           <input type="checkbox" id="speedLock" checked />
           <span>
             <strong>Уточнение по скорости</strong>
-            <span class="muted">жёсткая передача · выкл. на АКПП (проскальзывание ГТ)</span>
+            <span class="muted">выкл. на АКПП</span>
           </span>
         </label>
         <div class="actions">
@@ -137,7 +139,7 @@
           <button type="button" class="btn" id="clearBtn">Очистить всё</button>
         </div>
       </div>
-        <p class="hint" id="columnHint">Ищутся все разгоны на одной передаче: сначала вспышка записи и высокая педаль/дроссель, затем рост оборотов. На график — плато WOT (ПК) или вся рампа дросселя (телефон). Обороты — окно-гистерезис.</p>
+      <p class="hint" id="columnHint">Ищутся все разгоны на одной передаче: вспышка записи → высокая педаль/дроссель → рост оборотов. Обороты — окно-гистерезис.</p>
     </section>
 
     <section class="panel" id="columnMapPanel" hidden>
@@ -146,6 +148,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=46"></script>
+  <script src="app.js?v=47"></script>
 </body>
 </html>

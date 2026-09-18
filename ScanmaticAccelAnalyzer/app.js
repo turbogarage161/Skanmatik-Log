@@ -2058,10 +2058,27 @@ function scheduleReanalyze() {
 bindDualRange("rpmMin", "rpmMax", "rpmFill", "rpmRangeLabel", (a, b) => `${a}–${b}`, 100);
 bindDualRange("pedalMin", "pedalMax", "pedalFill", "pedalRangeLabel", (a, b) => `${a}–${b}`, 1);
 
-["minDuration", "dtWindow", "smoothWindow"].forEach((id) => {
+function bindSlider(id, labelId, fmt) {
   const el = $(id);
-  if (el) el.addEventListener("change", () => { if (logs.length) reanalyzeAll(); });
-});
+  const lab = $(labelId);
+  if (!el) return;
+  const sync = () => {
+    if (lab) lab.textContent = fmt(Number(el.value));
+  };
+  el.addEventListener("input", () => {
+    sync();
+    scheduleReanalyze();
+  });
+  el.addEventListener("change", () => {
+    sync();
+    if (logs.length || sm2Sources.length) reanalyzeAll();
+  });
+  sync();
+}
+
+bindSlider("minDuration", "minDurationLabel", (n) => `${n.toFixed(1)} с`);
+bindSlider("smoothWindow", "smoothWindowLabel", (n) => String(Math.round(n)));
+bindSlider("dtWindow", "dtWindowLabel", (n) => `${n.toFixed(2)} с`);
 document.querySelectorAll(".tab[data-accel-tab]").forEach((btn) => {
   btn.addEventListener("click", () => setAccelTab(btn.getAttribute("data-accel-tab")));
 });
